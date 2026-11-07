@@ -1,0 +1,108 @@
+# Rear-radar car dataset (nuScenes v1.0 format): label policy, gates and the runs to build.
+#
+# One file per recording lives in config/runs/<name>.yaml. Only the runs listed under
+# `runs:` at the bottom are built. The reasoning behind every measured value here is in
+# notes/calibration_history.md -- read it before changing one.
+#
+# ${VAR} / ${VAR:-default} are expanded from the environment. Relative paths are taken
+# relative to the repository root.
+
+dataset:
+  # Where `build_nuscenes_dataset.py label` writes. Bump the date for every new build;
+  # training defaults to whatever build this names.
+  output_root: data_nuscenes_2026_11_02
+  # Extra split keys (val_qa, laguna_*) carried from an earlier build. The build refuses
+  # if a named scene moved. Set to null if adding runs moves scene boundaries.
+  carry_splits_from: splits/carried_splits.json
+  # `decode` caches every scan here, so label policy can change without re-reading bags.
+  scan_cache_root: cache/scans
+  scene_max_seconds: 20.0
+  scene_max_gap_seconds: 2.0
+  sweeps:
+    max_lag_s: 0.5            # >= the training cfg's MAX_SWEEP_LAG_S
+    check_depth: 3            # validator: NUM_SWEEPS - 1 of the training cfg
+    max_full_stack_gap: 0.05  # validator: full-stack rate, background vs positives
+  # Sensor mounting is read from the URDF, not from the bags (they disagree; see history).
+  av24_urdf: ${AV24_URDF:-third_party/av24_urdf/av24.urdf}   # pinned copy of the car's URDF
+  sensor_extrinsic_tolerance_m: 0.01   # bag tf_static vs URDF translation; refuses beyond
+  feature_names:
+    - x
+    - y
+    - z
+    - v_rel
+    - v_abs
+    - v_abs_x
+    - v_abs_y
+    - rcs
+    - snr
+    - confidence
+    - power
+  # Must match the shared model yaml's anchor size; the builder asserts it.
+  car_size_lwh: [4.876, 1.930, 1.55]
+  min_points_in_box: 2
+  min_moving_points_in_box: 1   # ...of which this many must have |v_abs| >= moving_speed_mps
+  moving_speed_mps: 2.0
+  negative_fraction: 0.20
+  velocity_compensation_sign: 1.0
+  # Ego twist for Doppler compensation and the speed gate.
+  ego_odom_topic: /vehicle/uva_odometry
+  ego_odom_child_frame: center_of_gravity
+  # FRGen21 Doppler folds with a 40 m/s period above ~20 m/s ego speed (Laguna).
+  doppler_dealias:
+    enabled: true
+    period_mps: 40.0
+    static_tolerance_mps: 4.0   # folded tail reaches -44; the opponent reads ~ -25 at most
+  min_ego_speed_mps: 5.0        # slower scans are dropped (ego_slow)
+  coverage:
+    min_range_m: 2.0
+    max_range_m: 100.0
+    half_angle_deg: 60.0
+    point_cloud_range: [-102.4, -51.2, -16.0, 0.0, 51.2, 16.0]
+  # Drops spans where the box sits persistently sideways of the opponent's moving returns.
+  lateral_qa_gate:
+    enabled: true
+    moving_speed_mps: 2.0      # |v_abs| that separates the opponent from static clutter
+    search_along_m: 3.0        # search window beyond the box, along its length
+    search_across_m: 2.5       # ...and across its width
+    min_moving_returns: 3
+    window_s: 1.0              # centred rolling-median window
+    min_window_frames: 5
+    max_offset_m: 0.8
+    min_span_s: 1.0
+  # The along-track counterpart. Off: it would drop 637 unreviewed Laguna train frames.
+  along_qa_gate:
+    enabled: false
+    moving_speed_mps: 2.0
+    search_along_m: 3.0
+    search_across_m: 0.25      # the near-face corridor, as the validator's near_edge uses
+    min_moving_returns: 3
+    max_aspect_deg: 25.0
+    window_s: 1.0
+    min_window_frames: 5
+    max_offset_m: 0.8
+    min_span_s: 1.0
+  split:
+    # Used only by runs with `split: trainval`.
+    train_fraction: 0.75
+    guard_seconds: 2.0
+
+openpcdet:
+  # The lab lidar pipeline's timeline/box code. Ego/opponent odometry, datum offsets and
+  # opponent clocks come from its run config, so radar and lidar labels agree.
+  repo: third_party/openpcdet_geometry  # vendored copy of upstream 996c4ed
+  run_config: tools/pp_run_config_multitrack.yaml
+  # Private copy of the run config and odometry cache (never write the shared checkout).
+  local_cache_root: cache
+  # The box origin every run's box_center_forward_offset_m is measured against. The
+  # builder refuses if the shared code moves it.
+  expected_box_center_x_in_ram_m: 1.438
+
+# The runs to build. Each name is config/runs/<name>.yaml; comment a line out to leave a
+# run out of the build. Append new runs at the end: the order sets the order of the
+# nuScenes tables, so rebuilds stay byte-comparable. Splits are run-blocked: no
+# recording is in more than one split.
+runs:
+  - laguna_2026_07_26_rear    # train
+  - laguna_2026_07_25_rear    # train
+  - caltech_2026_05_05_rear   # val
+  - iu_2026_04_15_rear        # test

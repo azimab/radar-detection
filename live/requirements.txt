@@ -1,0 +1,6 @@
+# rear_radar_node.py; ROS 2 itself comes from apt. CPU-only torch:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0
+numpy>=1.21
+scipy>=1.8
+PyYAML>=5.4

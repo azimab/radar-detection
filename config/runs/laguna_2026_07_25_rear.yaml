@@ -1,0 +1,58 @@
+# Laguna Seca 2026-07-25 run3, IU opponent. Train split (added 2026-09-28).
+# Why each value is what it is: notes/calibration_history.md#laguna_2026_07_25_rear
+name: laguna_2026_07_25_rear
+location: laguna-seca   # nuScenes log.location
+split: train
+multitrack_run: laguna_2026_07_25_run3
+
+radar_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/no_lidar/no_lidar_0.mcap
+radar_topic: /radar_rear/frgen21/pointcloud
+ego_odom_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/no_lidar/no_lidar_0.mcap
+tf_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/no_lidar/no_lidar_0.mcap
+target_frame: rear_axle_middle
+sensor_frame_aliases: [radar_rear, frgen21, radar_rear_zf]
+
+# --- calibration -------------------------------------------------------------------
+# Header is a time-since-boot clock, so log time; sweep-clock put the offset at -0.06 s.
+time_source: log
+radar_time_offset_seconds: -0.06
+box_center_forward_offset_m: 0.50     # near_edge gate fit, matched to laguna_2026_07_26
+opponent_time_offset_seconds: 0.0
+# IU's ESKF reports its top GNSS antenna. Used only by the URDF window check.
+opponent_pose_origin: top_antenna
+
+# --- multitrack definition ---------------------------------------------------------
+# The shared run config has no laguna_2026_07_25_run3, so it is defined here in that
+# config's format and appended to the builder's private copy (cache/pp_run_config.local.yaml).
+# A name the shared config already has is refused, never overridden.
+# desc.txt: "Multiagent with IU. Mostly around 30mph, did 1 overtake going 50 while
+# they were going 30. Some solo laps at the end." The opponent recording
+# (IU's own NovAtel + ESKF, 20:32:03-20:50:24Z) overlaps no_lidar_0.mcap
+# (20:31:31-20:53:24Z); no_lidar_1.mcap is the solo laps and is left out.
+multitrack:
+  ego_odom:
+    - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/no_lidar/no_lidar_0.mcap
+  # Required by the shared parser but never read by this builder (optional here: it
+  # defaults to ego_odom).
+  fused_lidar:
+    - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/lidar/lidar.mcap
+  fuse_raw: true
+  tf_static:
+    - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/rosbags/no_lidar/no_lidar_0.mcap
+  opponents:
+    - name: iu
+      odom:
+        - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_25/run3/IU_Novatel_Topics_20260725_163124.mcap_0.mcap
+      odom_topic: /eskf/novatel_top/odometry
+      # Required by the shared parser, unused here: opponent_time_offset_seconds above applies.
+      time_offset_seconds: 0.0
+      # IU's ESKF "world" frame vs our exwayz map, measured 2026-09-28 with
+      #   pp_align_datum.py --run laguna_2026_07_25_run3 \
+      #     --ego-gnss-topic /novatel_top/bestpos --opp-gnss-topic /novatel_top/bestgnsspos
+      # Composed (each car's odometry fitted to its own GNSS): (-66.691, -66.470, -2.140),
+      # yaw +0.001 deg, i.e. a pure translation; per-car fit residuals 0.95 / 1.02 m.
+      # Direct GNSS-minus-pose check: (-66.890, -66.739, -2.140) -- within 0.3 m, the same
+      # agreement laguna_2026_07_26_run3's datum was accepted on. The composed value is
+      # used, as there. IU's z is local, so no separate z_offset.
+      z_offset: 0.0
+      map_offset_xyz: [-66.691, -66.470, -2.140]

@@ -1,0 +1,22 @@
+# Putnam Park 2026-05-05, Caltech opponent. Val split.
+# Why each value is what it is: notes/calibration_history.md#caltech_2026_05_05_rear
+name: caltech_2026_05_05_rear
+location: putnam-park   # nuScenes log.location
+split: val
+multitrack_run: caltech_2026_05_05_long
+
+radar_mcap: ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+radar_topic: /radar_rear/frgen21/pointcloud
+ego_odom_mcap: ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+# This tf_static predates the 5 deg radar pitch; the mounting comes from the URDF.
+tf_mcap: ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+target_frame: rear_axle_middle
+sensor_frame_aliases: [radar_rear, frgen21, radar_rear_zf]
+
+# --- calibration -------------------------------------------------------------------
+# Radar header leads log time by +500 ms (fast sensor clock), so log time.
+time_source: log
+box_center_forward_offset_m: -0.94    # near_edge gate fit
+opponent_time_offset_seconds: 0.0
+# /opponent/gps is the opponent's Novatel antenna pair. Used only by the URDF window check.
+opponent_pose_origin: novatel_midpoint

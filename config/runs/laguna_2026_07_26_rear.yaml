@@ -1,0 +1,22 @@
+# Laguna Seca 2026-07-26 run3, Purdue opponent. Train split.
+# Why each value is what it is: notes/calibration_history.md#laguna_2026_07_26_rear
+name: laguna_2026_07_26_rear
+location: laguna-seca   # nuScenes log.location
+split: train
+# Defined in the shared run config (third_party/.../pp_run_config_multitrack.yaml).
+multitrack_run: laguna_2026_07_26_run3
+
+radar_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/no_lidar/no_lidar_0.mcap
+radar_topic: /radar_rear/frgen21/pointcloud
+ego_odom_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/no_lidar/no_lidar_0.mcap
+tf_mcap: ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/no_lidar/no_lidar_0.mcap
+target_frame: rear_axle_middle
+sensor_frame_aliases: [radar_rear, frgen21, radar_rear_zf]
+
+# --- calibration -------------------------------------------------------------------
+# Header trails log time by a steady 78 ms (acquisition latency), so the header is used.
+time_source: header
+box_center_forward_offset_m: 0.43     # near_edge gate fit
+opponent_time_offset_seconds: 0.0
+# Purdue publishes base_link; treated as the CoG. Used only by the URDF window check.
+opponent_pose_origin: center_of_gravity

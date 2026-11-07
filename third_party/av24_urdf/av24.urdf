@@ -1,0 +1,198 @@
+<robot name="AV21">
+  <link name="center_of_gravity" />
+
+  <link name="rear_axle_middle" />
+  <link name="rear_axle_middle_ground">
+    <visual>
+      <geometry>
+        <mesh filename="package://il15_description/visual/il15.dae" />
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="novatel_a" />
+  <link name="novatel_b" />
+  <link name="front_antenna" />
+  <link name="top_antenna" />
+  <link name="left_antenna" />
+  <link name="right_antenna" />
+  <link name="vectornav" />
+  <link name="lidar_plate" />
+
+  <link name="iris_front" />
+  <link name="iris_left" />
+  <link name="iris_right" />
+
+  <!-- Camera pose links -->
+  <link name="camera_left_pose" />
+  <link name="camera_right_pose" />
+  <link name="camera_rear_forward_pose" />
+  <link name="camera_rear_backward_pose" />
+  <!-- Camera frame links -->
+  <link name="camera_front_left_center" />
+  <link name="camera_front_right_center" />
+  <link name="camera_left" />
+  <link name="camera_right" />
+  <link name="camera_rear_forward" />
+  <link name="camera_rear_backward" />
+
+  <link name="radar_front" />
+  <link name="radar_rear" />
+
+
+  <joint name="rear_axle_middle_ground_joint" type="fixed">
+    <parent link="rear_axle_middle_ground" />
+    <child link="rear_axle_middle"/>
+    <origin xyz="0 0 0.198" />
+  </joint>
+
+  <joint name="rear_axle_middle_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="center_of_gravity"/>
+    <origin xyz="1.3206 -0.030188 0.23598" />
+  </joint>
+
+  <joint name="novatel_a_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="novatel_a" />
+    <origin xyz="1.636 -0.075 -0.101" />
+  </joint>
+
+  <joint name="novatel_b_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="novatel_b" />
+    <origin xyz="1.636 0.075 -0.101" />
+  </joint>
+
+  <joint name="front_antenna_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="front_antenna" />
+    <origin xyz="3.176 0.0 0.372" />
+  </joint>
+
+  <joint name="top_antenna_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="top_antenna" />
+    <origin xyz="1.271 0.0 0.920" />
+  </joint>
+
+  <joint name="left_antenna_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="left_antenna" />
+    <origin xyz="2.055 0.497 0.353" />
+  </joint>
+
+  <joint name="right_antenna_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="right_antenna" />
+    <origin xyz="2.055 -0.497 0.353" />
+  </joint>
+
+  <joint name="vectornav_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="vectornav" />
+    <origin xyz="1.754 0.0 -0.118" />
+  </joint>
+
+  <joint name="lidar_plate_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="lidar_plate"/> 
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -0.0401426"/>
+  </joint>
+  
+  <joint name="iris_front_joint" type="fixed">
+    <parent link="lidar_plate" />
+    <child link="iris_front" />
+    <origin xyz="2.222 0.005 0.448" />
+  </joint>
+
+  <joint name="iris_left_joint" type="fixed">
+    <parent link="lidar_plate" />
+    <child link="iris_left" />
+    <origin xyz="1.564 0.149 0.535" rpy="0 0 1.9634954" />
+  </joint>
+
+  <joint name="iris_right_joint" type="fixed">
+    <parent link="lidar_plate" />
+    <child link="iris_right" />
+    <origin xyz="1.574 -0.153 0.535" rpy="0 0 -1.9634954" />
+  </joint>
+
+  <!-- Camera pose links -->
+  <joint name="camera_left_pose_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_left_pose" />
+    <origin xyz="2.020 -0.172 0.418" rpy="0 0 1.74533" />
+  </joint>
+
+  <joint name="camera_right_pose_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_right_pose" />
+    <origin xyz="2.020 -0.172 0.418" rpy="0 0 -1.74533" />
+  </joint>
+
+  <joint name="camera_rear_backward_pose_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_rear_backward_pose" />
+    <origin xyz="2.235 0.121 0.422" rpy="0 0 -3.14159265" />
+  </joint>
+
+    <joint name="camera_rear_forward_pose_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_rear_forward_pose" />
+    <origin xyz="1.365 0.0 0.723" />
+  </joint>
+
+  <!-- Camera Frame Links -->
+  <joint name="camera_front_left_center_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_front_left_center" />
+    <origin xyz="1.9942712586453337 0.15665536399135574 0.4702570108075435" rpy="-1.5206176285515525 -0.014579628431248715 -1.6230128770652787" />
+  </joint>
+
+  <joint name="camera_front_right_center_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="camera_front_right_center" />
+    <origin xyz="1.9673546081372921 -0.326431216360928 0.50457043624446" rpy="-1.5352788037092286 0.004190003637777995 -1.6021586465794666" />
+  </joint>
+
+  <joint name="camera_left_joint" type="fixed">
+    <parent link="camera_left_pose" />
+    <child link="camera_left" />
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+  </joint>
+
+  <joint name="camera_right_joint" type="fixed">
+    <parent link="camera_right_pose" />
+    <child link="camera_right" />
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+  </joint>
+
+  <joint name="camera_rear_backward_joint" type="fixed">
+    <parent link="camera_rear_backward_pose" />
+    <child link="camera_rear_backward" />
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+  </joint>
+
+  <joint name="camera_rear_forward_joint" type="fixed">
+    <parent link="camera_rear_forward_pose" />
+    <child link="camera_rear_forward" />
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+  </joint>
+
+  <joint name="radar_front_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="radar_front" />
+    <origin xyz="1.789 0.0 0.578" />
+  </joint>
+
+  <!-- radar_rear is mounted 5 deg nose-down (measured physical sensor placement on the car;
+       previously unmodelled). The pitch (rpy middle term, negative) maps the radar velocity back
+       to vehicle-forward; without it the longitudinal Doppler ego-velocity reads ~0.5% high vs GPS
+       (frgen21 3D-fit ROLEQ corroborates ~4.8 deg). See src/localization/radar_ego_velocity. -->
+  <joint name="radar_rear_joint" type="fixed">
+    <parent link="rear_axle_middle" />
+    <child link="radar_rear" />
+    <origin xyz="-0.498 0.0 0.233" rpy="0 -0.0872665 3.141592653589793"/>
+  </joint>
+</robot>

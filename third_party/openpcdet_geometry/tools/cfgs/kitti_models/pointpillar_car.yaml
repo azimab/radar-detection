@@ -1,0 +1,152 @@
+# Single-class PointPillars (Putnam Park KITTI export).
+#
+# ONNX / TensorRT: run CUDA-PointPillars ``tool/export_onnx.py`` with this same
+# file as ``--cfg_file`` so POINT_CLOUD_RANGE, VOXEL_SIZE, and MODEL match training.
+# Cavauto ``params.h``: regenerate from this file via ``CUDA-PointPillars/tool/gen_params_h.py``.
+CLASS_NAMES: ['Car']
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset_pp.yaml
+    ALLOW_EMPTY_GT: True
+    # rear_axle_middle (KITTI velodyne), meters. Must match ``build_pp_kitti.py``.
+    # Chosen so (x_max-x_min)/0.16 and (y_max-y_min)/0.16 are multiples of 8, and
+    # round((z_max-z_min)/4)==1 for VOXEL_SIZE z=4 (PointPillarScatter requires nz==1).
+    #
+    # x WIDENED 2026-08-14 from +-99.84 to +-149.76 to stop masking away long-range
+    # labels. Needs NO dataset rebuild: write_frame stores the full unclipped cloud and
+    # this range is applied at load time by mask_points_and_boxes_outside_range, so the
+    # 2,816 labels beyond 100 m were already on disk and simply discarded every epoch.
+    #
+    # Why 149.76 specifically: span must be divisible by 1.28 m for span/0.16 to be a
+    # multiple of 8. 299.52/0.16 = 1872 = 8*234. Note +-119.84 is NOT valid (1498).
+    # Costs 1.5x the BEV cells. Stops here rather than further because past ~150 m only
+    # 27% of labels are in front of us -- the rest are astern, where the front/left/right
+    # rig has no coverage.
+    #   y: 106.24/0.16 = 664 = 8*83 (unchanged)
+    #   z: (3.0 - -2.5)/4 = 1.375 -> nz = 1 (unchanged; NOT widened, because 9.8% of
+    #      labels are already z-clipped from GroundSurface falling back to the opponent's
+    #      untrustworthy reported z, and widening z would import exactly those)
+    #
+    # Regenerate params.h from this file for deploy (gen_params_h.py) or the car will
+    # decode boxes against the old grid.
+    POINT_CLOUD_RANGE: [-149.76, -53.12, -2.5, 149.76, 53.12, 3.0]
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {
+            'train': True,
+            'test': False
+          }
+
+        - NAME: transform_points_to_voxels
+          VOXEL_SIZE: [0.16, 0.16, 4]
+          MAX_POINTS_PER_VOXEL: 32
+          # train RAISED 2026-08-14 from 16000 to match test. At 16000 the model trained
+          # on truncated scenes (measured p90 was 25,569 non-empty pillars per frame, so
+          # 45% of frames were clipped) while being evaluated and deployed at 40000 --
+          # and shuffle_points runs first, so the dropped pillars were random. That
+          # disproportionately thins DISTANT objects, which hold few pillars to begin
+          # with, so it worked directly against long-range recall. Widening
+          # POINT_CLOUD_RANGE 1.5x would have made it worse.
+          MAX_NUMBER_OF_VOXELS: {
+            'train': 40000,
+            'test': 40000
+          }
+
+MODEL:
+    NAME: PointPillar
+
+    VFE:
+        NAME: PillarVFE
+        WITH_DISTANCE: False
+        USE_ABSLOTE_XYZ: True
+        USE_NORM: True
+        NUM_FILTERS: [64]
+
+    MAP_TO_BEV:
+        NAME: PointPillarScatter
+        NUM_BEV_FEATURES: 64
+
+    BACKBONE_2D:
+        NAME: BaseBEVBackbone
+        LAYER_NUMS: [3, 5, 5]
+        LAYER_STRIDES: [2, 2, 2]
+        NUM_FILTERS: [64, 128, 256]
+        UPSAMPLE_STRIDES: [1, 2, 4]
+        NUM_UPSAMPLE_FILTERS: [128, 128, 128]
+
+    DENSE_HEAD:
+        NAME: AnchorHeadSingle
+        CLASS_AGNOSTIC: False
+
+        USE_DIRECTION_CLASSIFIER: True
+        DIR_OFFSET: 0.78539
+        DIR_LIMIT_OFFSET: 0.0
+        NUM_DIR_BINS: 2
+
+        ANCHOR_GENERATOR_CONFIG: [
+            {
+                'class_name': 'Car',
+                'anchor_sizes': [[4.876, 1.930, 1.55]],
+                'anchor_rotations': [0, 1.57],
+                'anchor_bottom_heights': [-0.23],
+                'align_center': False,
+                'feature_map_stride': 2,
+                'matched_threshold': 0.6,
+                'unmatched_threshold': 0.45
+            }
+        ]
+
+        TARGET_ASSIGNER_CONFIG:
+            NAME: AxisAlignedTargetAssigner
+            POS_FRACTION: -1.0
+            SAMPLE_SIZE: 512
+            NORM_BY_NUM_EXAMPLES: False
+            MATCH_HEIGHT: False
+            BOX_CODER: ResidualCoder
+
+        LOSS_CONFIG:
+            LOSS_WEIGHTS: {
+                'cls_weight': 1.0,
+                'loc_weight': 2.0,
+                'dir_weight': 0.2,
+                'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+            }
+
+    POST_PROCESSING:
+        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
+        SCORE_THRESH: 0.1
+        OUTPUT_RAW_SCORE: False
+
+        EVAL_METRIC: kitti
+
+        NMS_CONFIG:
+            MULTI_CLASSES_NMS: False
+            NMS_TYPE: nms_gpu
+            NMS_THRESH: 0.01
+            NMS_PRE_MAXSIZE: 4096
+            NMS_POST_MAXSIZE: 500
+
+
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 4
+    NUM_EPOCHS: 80
+
+    OPTIMIZER: adam_onecycle
+    LR: 0.003
+    WEIGHT_DECAY: 0.01
+    MOMENTUM: 0.9
+
+    MOMS: [0.95, 0.85]
+    PCT_START: 0.4
+    DIV_FACTOR: 10
+    DECAY_STEP_LIST: [35, 45]
+    LR_DECAY: 0.1
+    LR_CLIP: 0.0000001
+
+    LR_WARMUP: False
+    WARMUP_EPOCH: 1
+
+    GRAD_NORM_CLIP: 10

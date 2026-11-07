@@ -1,0 +1,27 @@
+# data and caches (rebuild with build_nuscenes_dataset.py)
+data_nuscenes*/
+cache/
+logs/
+vendor/pylib/
+
+# python / editor
+__pycache__/
+*.pyc
+.vscode/
+
+# large or sensitive artefacts
+*.mcap
+*.pcd
+*.npz
+*.npy
+*.pth
+*.pt
+*.local.yaml
+
+# training outputs and the external RadarPillar checkout
+training/logs/
+training/figures/
+training/vendor/
+
+# live demo bags
+live/demo_bags/

@@ -1,0 +1,622 @@
+# Multi-track PointPillars data config: PP + IMS + LVMS + Laguna Seca.
+#
+#   python3 pp_pipeline.py --run-config pp_run_config_multitrack.yaml --mode run --dry-run
+#   python3 pp_pipeline.py --run-config pp_run_config_multitrack.yaml --mode submit-run
+#
+# Sources and gates come from PIPELINE_PLAN.md; every run here passed the Phase C audit
+# (tools/pp_audit_sessions.py -> session_manifest.json), except Laguna Seca, which the
+# audit tool does not yet enumerate and which is configured by hand below.
+#
+# Two conventions that are easy to get wrong and are load-bearing:
+#
+#  * Opponent GT topic is `/<team>/vehicle/uva_odometry`, NOT the `/old/` variant.  Both
+#    channels exist in every archive bag, but the `/old/` ones carry ZERO messages --
+#    verified across all 10 GT bags.  Using them yields an empty timeline.
+#  * `fuse_raw: true` runs publish only /pcl_front|left|right.  They are fused into
+#    rear_axle_middle in memory at ingest, resolving each session's own /tf_static.
+#    Fused clouds are never written to disk (~300 GB of intermediates, PIPELINE_PLAN 4).
+
+run_name: multitrack_r150_run2
+
+paths:
+  repo_dir: ${LIDAR_OPENPCDET}
+  log_dir: ${LIDAR_OPENPCDET}/logs
+  # Deliberately not data/kitti: keeps the existing single-track dataset intact until
+  # this one has passed its gates.
+  data_root: ${LIDAR_OPENPCDET}/data/kitti_multitrack
+
+container:
+  image: tools/containers/pointpillars-cu113.sif
+  binds:
+    - ${AV24_DATA}
+
+inputs:
+  ego_odom_topic: /vehicle/uva_odometry
+  fused_lidar_topic: /lidar_points     # only consulted when fuse_raw is false
+  # --- Opponent clock offsets, remeasured 2026-09-27 -------------------------------
+  # Every opponent carries the SAME -0.035 s, and that is deliberate.
+  #
+  # pp_clock_sweep.py swept all 14 opponents offline against the now-complete
+  # frame_times.json (100% coverage only since the box-origin rebuild). Nine were
+  # measurable; they fall between -0.020 and -0.055 s, median -0.035.
+  #
+  # SUPERSEDED 2026-09-28 by a hand review (419 frames, tools/pp_handlabel_web.py). The
+  # values below are now PER TEAM, and each line carries its own evidence.
+  #
+  # What changed and why the old reasoning failed: the sweep maximises median
+  # points-in-box, and that objective has a PLATEAU. Once the visible cluster sits inside
+  # the 4.876 m box, sliding the box changes the count by nothing, so the argmax inside the
+  # flat region is decided by noise. Measured pooled plateau width: 0.040 s -- WIDER than
+  # the per-run spread the old comment here used it to rule out. It could not have detected
+  # the variation it declared absent.
+  #
+  # Two independent methods now agree per opponent, on the same frames: the point sweep
+  # (bounded by its plateau, not its argmax) and the hand review (shape -- a reviewer reads
+  # a rear wing, which no point count can). Five of eleven opponents are measurable and
+  # both methods concur on all five:
+  #
+  #   unimore  @30.7 m/s  pts -0.030 (plateau -0.045..-0.025)  hand -0.034  -> -0.032
+  #   unimore  @35.9 m/s  pts -0.025 (plateau -0.060..-0.015)  hand -0.018  -> -0.022
+  #   polimove @35.6 m/s  pts +0.005 (plateau -0.010..+0.010)  hand +0.014  -> +0.009
+  #   polimove @45.1 m/s  pts -0.010 (plateau -0.025..+0.000)  hand +0.001  -> -0.005
+  #   kaist    @38.7 m/s  pts -0.035 (plateau -0.040..-0.010)  hand -0.007  -> -0.021
+  #
+  # The structure is PER TEAM, not per run and not uniform. Grouped by car, unimore reads
+  # -0.032/-0.022 and polimove +0.009/-0.005: within-car spread ~0.012 s, between-team
+  # difference 0.029 s, more than twice the within-car noise. Each team is self-consistent
+  # across sessions, which fits per-team odometry publishing latency. The old uniform
+  # -0.035 was a compromise between two genuinely different teams.
+  #
+  # Also settled by the same review: there is NO fixed spatial error. Fitting
+  # du = e + v*dt over all 402 answers (speeds 0-63 m/s) gives e = +0.027 +- 0.045 m,
+  # indistinguishable from zero, and dt significant at 16 sigma. So OPP_REAR_OVERHANG = 1.00
+  # stands and NO per-team lever arm should be encoded -- the hypothesis that had been the
+  # leading explanation for the per-run box-centre spread is refuted. The proof is one
+  # polimove car at three speeds: du varies 8x (+1.74 / +1.62 / +0.22 m) while du/v does
+  # not, which a lever arm fixed in metres cannot do.
+  #
+  # Six opponents remain unmeasurable (flat curve: the opponent barely moves, and a clock
+  # error only shows through the opponent's own motion). They inherit their own team's value
+  # where one exists, else the median. This matters little by construction: the label error
+  # is v*dt, so the opponents that cannot be measured are exactly the slow ones where any
+  # dt error is small -- pp/purdue at 1.4 m/s shifts 4 cm even if dt is wrong by 0.03 s.
+  #
+  # Predicted on the reviewed frames: median |du| 0.63 -> 0.31 m, rms 0.93 -> 0.47 m,
+  # within 0.50 m 43% -> 71%.
+  #
+  # Still unexplained, and NOT clock: iu (du -0.76) and lvms_2025_01_08/unimore (du +0.93,
+  # dw -1.00) are stationary, so no time offset can move them. Their errors are geometric.
+  runs:
+    # --- Putnam Park -------------------------------------------------------------
+    - name: pp_2026_04_28_run2
+      # The known-good control (PIPELINE_PLAN 1.4/C): the only run whose clouds are
+      # already fused on-car and already in rear_axle_middle. Keep it first; it is the
+      # reference every enumeration or geometry change gets checked against.
+      # Paths are pinned to files, not directories: rosbags/no_lidar/ was polluted on
+      # 2026-05-14 with an unrelated gps_raptor_radar.mcap by another user.
+      ego_odom:
+        - ${AV24_DATA}/raw/PP/2026_04_28/run2/rosbags/no_lidar/no_lidar_0.mcap
+      fused_lidar:
+        - ${AV24_DATA}/raw/PP/2026_04_28/run2/lidar/fused_lidar.mcap/fused_lidar.mcap_0.mcap
+      opponents:
+        - name: purdue
+          # Purdue's own stack, recorded in-run on the SAME topic name as ego, so it
+          # cannot be auto-detected -- this is the MANUAL_GT_MAP case.
+          odom:
+            - ${AV24_DATA}/raw/PP/2026_04_28/run2/purdue_gt_from_raw/purdue_gt_from_raw_0.mcap
+          odom_topic: /vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # purdue, 1.4 m/s: unmeasurable, inherits the median. At this speed a 0.03 s error moves the box 4 cm.
+
+    - name: caltech_2026_05_05_long
+      # DISABLED 2026-09-29. Its boxes are not on the opponent. Inspection of the rendered
+      # close frames shows "Car" labels at 5.0-5.5 m holding 5-7 points in a visibly EMPTY
+      # box, with the dense cluster outside the box's forward edge. At that range a real car
+      # returns thousands of points (pp_2026_04_28 reads 3,194 at 4.6 m).
+      #
+      # Two audits missed this and it is worth recording why:
+      #   * pp_label_geometry reported median 55 pts and floor residual -0.387 m, among the
+      #     best in the dataset. A median hides a bimodal split, and the floor residual is
+      #     only computed over boxes that HAVE points, so empty boxes never contribute.
+      #   * the 2026-09-28 missing-label audit did flag it: caltech's dense clusters
+      #     classified as STRUCTURE, not car (5.9 x 5.5 m, 0.22 m thick, 1.10 m above the
+      #     sensor, n8/n3 = 5.56). That was the signal, and it was not followed up.
+      #
+      # Dropped via pp_drop_runs.py, so the frames stay on disk and this is reversible.
+      # Re-enable only once the opponent pose source is understood -- Putnam Park is already
+      # covered by pp_2026_04_28_run2 (15,860 labels), so nothing unique is lost.
+      enabled: false
+      # Putnam Park, Caltech as opponent. 33.6 min -- the second largest run here, and it
+      # was missed from the first multitrack config: pp_audit_sessions.py only walks
+      # ${AV24_DATA}/raw, and this run lives in our processed dir, so it never
+      # appeared in the audit's table. It was in the previously-working pp_run_config.yaml
+      # all along.
+      #
+      # Already fused on-car (/lidar_points present) AND carries the raw /pcl_* as well.
+      # Clouds declare rear_axle_middle_ground, so cloud_frame_z_offset applies -0.198 --
+      # this is one of the two runs whose boxes used to sit 0.198 m high (PIPELINE_PLAN 1.4).
+      # PTP-synced /opponent/gps (RTK, fit residual 0.31-0.62 m).
+      ego_odom:
+        - ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+      fused_lidar:
+        - ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+      tf_static:
+        - ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+      opponents:
+        - name: caltech
+          odom:
+            - ${AV24_DATA}/processed/nuscenes/caltech_2026_05_05/uvadata_caltech_long_lidar.mcap
+          odom_topic: /opponent/gps
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # caltech: not hand-reviewed, curve flat. Inherits the median.
+
+    - name: iu_2026_04_15
+      # DISABLED 2026-09-28. The opponent is stationary for essentially the whole run
+      # (median speed 0.0 m/s), and three separate problems follow from that:
+      #
+      #   * Its heading is synthesised course-over-ground from the position track, which is
+      #     UNDEFINED for a car that is not moving. The yaw in these labels is not a
+      #     measurement of anything.
+      #   * The hand review could not judge it: 17 of 40 frames came back "can't tell", by
+      #     far the worst rate of any opponent (every other run scored 0).
+      #   * Its longitudinal error, du -0.76 m, is geometric and therefore untouched by the
+      #     per-team clock offsets -- a stationary car cannot be displaced by a time offset.
+      #     Nothing in this rebuild improves it.
+      #
+      # 5 min of formation-pace data with an undefined heading is not worth the risk of
+      # teaching the model a wrong yaw. Re-enable only if a real body-yaw source is found
+      # for the opponent, not a course-over-ground substitute.
+      enabled: false
+      # Putnam Park, IU as opponent. 5 min. Also missed for the same reason as Caltech.
+      # Raw /pcl_* only, so it fuses at ingest; the precomputed _lidar_points.mcap this
+      # used to point at was deleted on 2026-07-30 as a redundant intermediate.
+      ego_odom:
+        - ${AV24_DATA}/processed/nuscenes/iu_data/5min_uvadata_iu.mcap
+      fused_lidar:
+        - ${AV24_DATA}/processed/nuscenes/iu_data/5min_uvadata_iu.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/processed/nuscenes/iu_data/5min_uvadata_iu.mcap
+      opponents:
+        - name: iu
+          odom:
+            - ${AV24_DATA}/processed/nuscenes/iu_data/5min_uvadata_iu.mcap
+          odom_topic: /opponent/gps
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # iu: stationary opponent, yaw is synthesised course-over-ground. Unmeasurable; inherits.
+
+    # --- IMS ---------------------------------------------------------------------
+    - name: ims_2024_08_04_run3_unimore
+      # >>> THE 2026-08-03 DROP DECISION BELOW IS WRONG. Kept for the record; see the
+      # >>> correction immediately after it. The run is RE-ENABLED as of 2026-08-14 --
+      # >>> its correction was verified by probe and it rebuilt as the cleanest run in
+      # >>> the dataset (2.6 deg median relative yaw), contributing 2,461 labels.
+      #
+      # DROPPED 2026-08-03 (user decision). Two independent reasons, and they agree:
+      #
+      #  * its tf_static differs from av24.urdf by 8.92 cm / 2.300 deg (PIPELINE_PLAN
+      #    1.8) -- the rig was recalibrated between Aug and Sep 2024, and 2.3 deg is
+      #    ~2 m of lateral error at 50 m. It is the ONLY run of the nine that differs.
+      #  * pp_box_alignment.py puts its GT headings at 64.7% agreement with the
+      #    self-occlusion test, against 90.0% across the dataset and 100% at 50-100 m.
+      #    It is the worst run by a wide margin.
+      #
+      # Costs 3,079 frames (4.6%). Its frames are still on disk -- only ImageSets
+      # excludes them (pp_drop_runs.py), so this is reversible without a rebuild.
+      #
+      # CORRECTION 2026-08-14: both reasons above are the SAME mistake, and it is ours.
+      #
+      # av24.urdf rotates the whole lidar_plate by rpy="0 0 -0.0401426" = -2.2999 deg, and
+      # all three iris sensors hang off that plate -- which is why this bag differs by
+      # 2.300 deg on all three, identically. That is one rigid plate rotation, not three
+      # sensor errors. `git log -S"0.0401426"` in cavauto dates it exactly:
+      #
+      #   2024-08-04  this run recorded          <- plate rotation does not exist yet
+      #   2024-09-06  ims_2024_09_06 recorded    <- rotation in use on-car
+      #   2024-09-09  7e380ee28 "[IMS24] Merging in code ran on IMS 2024"  <- enters URDF
+      #
+      # The bag does not disagree with the URDF; it PREDATES it. Forcing the URDF onto
+      # this run injects a spurious rotation (~2 m lateral at 50 m) into a session that
+      # was correctly calibrated for its own date -- which is exactly the 64.7% heading
+      # agreement that was read as evidence the run was bad. It is not a bad run.
+      #
+      # Fix: undo the URDF's plate rotation. VERIFIED 2026-08-14 by scanning candidate
+      # corrections against real points at a mid-range in-view window (31-64 m, where
+      # 2.3 deg is 1.2-2.6 m and therefore actually visible):
+      #
+      #   deg    frames>=5pts   total pts        deg    frames>=5pts   total pts
+      #   +0.00       52            622         +2.00       155           1952
+      #   +1.00      153           1843         +2.30       157           2019   <- peak
+      #                                         +3.50        68           1434
+      #
+      # 3x more labelled frames, peaking at exactly the derived 2.2999 -- theory and
+      # measurement agree independently, which is what justifies re-enabling.
+      #
+      # NOTE the closest-approach window canNOT see this: at its 11.6 m median range a
+      # 2.3 deg rotation is 0.44 m, well inside the car's 1.93 m width, so corrected and
+      # uncorrected are identical (414/2247 vs 414/2252 points). An angular error must be
+      # probed at MID range; the probe's default window is the least sensitive place.
+      ego_yaw_correction_deg: 2.2999
+      enabled: true
+      ego_odom:
+        - ${AV24_DATA}/raw/IMS/2024_08_04/run3_unimore/rosbag2_2024_08_04-19_36_25_no_lidar/no_lidar.mcap
+      fused_lidar:
+        - ${AV24_DATA}/raw/IMS/2024_08_04/run3_unimore/rosbag2_2024_08_04-19_36_25_lidar/lidar.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/IMS/2024_08_04/run3_unimore/rosbag2_2024_08_04-19_36_25_no_lidar/no_lidar.mcap
+      opponents:
+        - name: unimore
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2024_IMS_Labels/UNIMORE/localized/2024_08_04_19_30_07/2024_08_04_19_30_07_0.mcap
+          odom_topic: /unimore/vehicle/uva_odometry
+          # MEASURED 2026-08-14, swept at two mid-range in-FOV windows (31-70 m):
+          #
+          #   window          peak(total pts)   peak(frames>=10)   at 0.000 s
+          #   1722800351        -0.080 (5598)        -0.150           2019
+          #   1722800529        -0.150 (2294)        -0.130            813
+          #
+          # Zero is 2.8x worse than the peak on BOTH windows, so it is decisively wrong.
+          # -0.12 is the centre of the two; they disagree by 0.070 s, which is the top of
+          # this method's noise floor, so treat the value as +-0.04 rather than exact.
+          #
+          # Roughly DOUBLE the -0.065 s systematic measured across the other runs -- i.e.
+          # genuine per-run clock skew on top of the pipeline term. IMS and LVMS had no
+          # PTP (user, 2026-08-14), so per-run skew is expected; it is only visible here
+          # because 08_04's is large enough to clear the sweep's noise floor.
+          #
+          # This is what the acceptance gate caught: at 30.3 m/s, -0.12 s is 3.6 m along
+          # track -- more than half a car length -- which threw the point centroid past
+          # the end of the 4.876 m box and gave 53.4% self-occlusion agreement (chance)
+          # against 87.8% dataset-wide. Re-run pp_box_alignment.py after rebuilding: the
+          # number to watch is that 53.4% climbing toward 87.8%.
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.032   # unimore @30.7 m/s: points peak -0.030 (plateau -0.045..-0.025), hand -0.034. AGREE.
+
+    - name: ims_2024_09_06_passing_comp
+      # MEASURED 2026-08-14. Its tf_static reproduces av24.urdf to 0.000 deg, yet the
+      # boxes carry a lateral error that GROWS with range -- the signature of an angular
+      # error, which no lever arm can produce. Fitting box->cluster lateral offset against
+      # range over head-on/tail-on views at 30-80 m gives -1.17 deg, stable across the run
+      # (halves -1.29 / -1.08), so it is extrinsic rather than localization drift.
+      #
+      # BUT the -1.17 deg fit OVERSHOOTS. Scoring points-in-box against candidate
+      # corrections on a decoded in-FOV window (the criterion that actually decides
+      # whether a label survives) puts the optimum near +0.50 deg, and +1.17 is *worse
+      # than no correction at all*:
+      #
+      #   +0.00 deg  7882 pts, median 39      +1.17 deg  7222 pts, median 33
+      #   +0.50 deg  8931 pts, median 45      -1.17 deg  5348 pts, median 22
+      #
+      # Why the fit is biased high: even head-on, the visible cluster's centroid is not
+      # the car's centre -- one rear corner is better lit than the other, and the fit
+      # reads that lateral bias as extra angle. The sign is confirmed either way (-1.17
+      # is much worse). Trust points-in-box over the geometric fit.
+      #
+      # Control: pp_2026_04_28_run2 fits to -0.04 deg, which is what says IMS is signal
+      # and not method bias.
+      #
+      # FINAL VALUE, scanned over two independent in-FOV windows. Each window's own
+      # optimum (+0.50 and +1.00) brackets +0.75, and +0.75 lands within 2% of both:
+      #
+      #   deg      window 1725659807      window 1725660064
+      #   +0.00    7882 pts, 192 f>=10    9641 pts, 197 f>=10
+      #   +0.50    8931       195        10224       199
+      #   +0.75    8903       195        10612       199     <- chosen
+      #   +1.00    7871       193        10849       200
+      #
+      # Worth +10-13% points-in-box at both windows. Control pp_2026_04_28_run2 scans to
+      # +0.25 deg for +0% -- it needs no correction, which is what says this is real.
+      # ~1.3 m of lateral error at 100 m; matters most when POINT_CLOUD_RANGE widens.
+      ego_yaw_correction_deg: 0.75
+      ego_odom:
+        - ${AV24_DATA}/raw/IMS/2024_09_06/passing_comp/rosbag2_2024_09_06-21_53_17_no_lidar/no_lidar.mcap
+      fused_lidar:
+        - ${AV24_DATA}/raw/IMS/2024_09_06/passing_comp/rosbag2_2024_09_06-21_53_17_lidar/lidar.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/IMS/2024_09_06/passing_comp/rosbag2_2024_09_06-21_53_17_no_lidar/no_lidar.mcap
+      opponents:
+        - name: unimore
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2024_IMS_Labels/UNIMORE/localized/2024_09_06_21_52_04/2024_09_06_21_52_04_0.mcap
+          odom_topic: /unimore/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.022   # unimore @35.9 m/s: points peak -0.025 (plateau -0.060..-0.015), hand -0.018. AGREE.
+
+    # --- LVMS --------------------------------------------------------------------
+    - name: lvms_2025_01_06_run2
+      ego_odom:
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_no_lidar/no_lidar.mcap
+      fused_lidar:
+        # 27 of 28 splits, listed in recording order. _26 is omitted: it is truncated
+        # (RecordLengthLimitExceeded, caught by the Phase C audit) and decoding it aborts
+        # the run. The resulting gap costs a few frames at the seam, which the fusion
+        # staleness guard drops rather than fusing across.
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_0.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_1.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_2.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_3.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_4.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_5.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_6.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_7.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_8.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_9.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_10.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_11.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_12.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_13.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_14.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_15.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_16.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_17.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_18.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_19.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_20.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_21.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_22.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_23.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_24.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_25.mcap
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_lidar/rosbag2_2025_01_06-21_18_07_lidar_27.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/LVMS/2025_01_06/run2_polimove_unimore/rosbag2_2025_01_06-21_18_07_no_lidar/no_lidar.mcap
+      opponents:
+        - name: unimore
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/UNIMORE/localized/2025_01_06_21_18_12/2025_01_06_21_18_12_0.mcap
+          odom_topic: /unimore/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.027   # unimore, 0.1 m/s: unmeasurable. Inherits the unimore car mean of the two IMS sessions.
+        - name: polimove
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/POLIMOVE/localized/2025_01_06_21_15_50/2025_01_06_21_15_50_0.mcap
+          odom_topic: /polimove/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: +0.002   # polimove, 3.8 m/s: unmeasurable. Inherits the polimove car mean of s1/s2.
+
+    - name: lvms_2025_01_07_run3_fourcar
+      # NOT the densest multi-car data, despite the name -- measured, only 1.0% of this
+      # run has two opponents within 120 m, and the 2026-07-31 build produced ZERO
+      # two-car frames from it. Three of its four GT sources are time-disjoint POLIMOVE
+      # sessions of the same car, so it is effectively two cars, and KAIST is far away
+      # whenever POLIMOVE is close. lvms_2025_01_06_run2 is the real multi-car run
+      # (36.1% of it has two opponents in range, 1380 two-car frames). Still worth
+      # keeping: it contributed 6,853 single-car labels.
+      ego_odom:
+        - ${AV24_DATA}/raw/LVMS/2025_01_07/run3_fourcar/rosbag2_2025_01_07-22_58_20_no_lidar/no_lidar.mcap
+      fused_lidar:
+        # Only the full 3308 s recording. The run dir also holds
+        # lvms-2025-01-07-tracing-full.mcap (85 s) and lidar_tracker_testing.mcap (95 s),
+        # which are excerpts whose spans lie INSIDE this bag -- including them would
+        # duplicate frames and pair front sweeps with unrelated flank sweeps.
+        - ${AV24_DATA}/raw/LVMS/2025_01_07/run3_fourcar/rosbag2_2025_01_07-22_58_20_lidar/lidar.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/LVMS/2025_01_07/run3_fourcar/rosbag2_2025_01_07-22_58_20_no_lidar/no_lidar.mcap
+      opponents:
+        - name: kaist
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/KAIST/localized/2025_01_07_23_00_58/2025_01_07_23_00_58_0.mcap
+          odom_topic: /kaist/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # kaist: 530-698 m away all run, never measurable. Inherits the kaist value from lvms_01_08.
+        # Three time-disjoint POLIMOVE sessions covering one car across the run. Each is
+        # its own timeline and contributes a box only inside its own span.
+        - name: polimove_s1
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/POLIMOVE/localized/2025_01_07_22_56_22/2025_01_07_22_56_22_0.mcap
+          odom_topic: /polimove/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: +0.009   # polimove_s1 @35.6 m/s: points peak +0.005 (plateau -0.010..+0.010), hand +0.014. AGREE.
+        - name: polimove_s2
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/POLIMOVE/localized/2025_01_07_23_18_33/2025_01_07_23_18_33_0.mcap
+          odom_topic: /polimove/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.005   # polimove_s2 @45.1 m/s: points peak -0.010 (plateau -0.025..+0.000), hand +0.001. AGREE.
+        - name: polimove_s3
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/POLIMOVE/localized/2025_01_07_23_40_18/2025_01_07_23_40_18_0.mcap
+          odom_topic: /polimove/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: +0.002   # polimove_s3, 5.4 m/s: unmeasurable. Inherits the polimove car mean of s1/s2.
+
+    - name: lvms_2025_01_08_run1
+      ego_odom:
+        - ${AV24_DATA}/raw/LVMS/2025_01_08/run1/rosbag2_2025_01_08-19_19_18_no_lidar/no_lidar.mcap
+      fused_lidar:
+        - ${AV24_DATA}/raw/LVMS/2025_01_08/run1/rosbag2_2025_01_08-19_19_18_lidar/lidar.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/LVMS/2025_01_08/run1/rosbag2_2025_01_08-19_19_18_no_lidar/no_lidar.mcap
+      opponents:
+        - name: unimore
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/UNIMORE/localized/2025_01_08_19_07_37/2025_01_08_19_07_37_0.mcap
+          odom_topic: /unimore/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.027   # unimore, 0.1 m/s parked: unmeasurable. Inherits the unimore car mean.
+        - name: kaist
+          odom:
+            - ${AV24_DATA}/processed/opponent_gps_data/2025_LVMS_Labels/KAIST/localized/2025_01_08_19_14_10/2025_01_08_19_14_10_0.mcap
+          odom_topic: /kaist/vehicle/uva_odometry
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # kaist @38.7 m/s: points peak -0.035 (plateau -0.040..-0.010), hand -0.007. AGREE.
+
+    # --- Laguna Seca -------------------------------------------------------------
+    - name: laguna_2026_07_26_run3
+      # UNBLOCKED 2026-07-31. The datum mismatch is corrected by map_offset_xyz below,
+      # measured with pp_align_datum.py. Validated against real lidar points at the true
+      # closest pass (t~1785107565): 100% of frames labelled, median 538 points in box,
+      # box floor within -0.087 m of the points. It was 2% and 0 points before.
+      # Not in session_manifest.json: the audit tool does not enumerate Laguna yet, so
+      # every path here was verified by hand. The GT bag lives OUTSIDE the run dir.
+      # PATHS UPDATED 2026-08-14. ark8su reorganised this run dir on 2026-08-13: every bag
+      # moved down one level into run3/rosbags/, and the nine lidar_0..8.mcap splits were
+      # consolidated into a single lidar.mcap. The old paths raised FileNotFoundError.
+      #
+      # Verified before repointing, because a truncated consolidation would silently cost
+      # 7,336 labels rather than failing: lidar.mcap spans 1204.6 s against no_lidar's
+      # 1204.9 s and the cached ego odometry's 1204.4 s, and it still carries all three
+      # /pcl_front|left|right topics (18,069 / 18,068 / 18,061 messages) that fuse_raw
+      # needs. tf_static is present in no_lidar_0.mcap.
+      ego_odom:
+        - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/no_lidar/no_lidar_0.mcap
+      fused_lidar:
+        - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/lidar/lidar.mcap
+      fuse_raw: true
+      tf_static:
+        - ${AV24_DATA}/raw/LagunaSeca/Cavalier/2026_07_26/run3/rosbags/no_lidar/no_lidar_0.mcap
+      opponents:
+        - name: purdue
+          odom:
+            - ${AV24_DATA}/raw/LagunaSeca/purdue_pos_and_vel_odom_jul26_4pm/purdue_pos_and_vel_odom_jul26_4pm_0.mcap
+          odom_topic: /odometry/global_filtered
+          # SET TO THE MEASURED SYSTEMATIC -0.035 s (2026-09-27, pp_clock_sweep.py).
+          # Not a per-opponent fit: see the header note above `runs:`.
+          time_offset_seconds: -0.021   # purdue, 9.8 m/s: curve flat, unmeasurable. Inherits the median.
+          # Purdue logs absolute altitude; our odometry is in the exwayz local map frame.
+          # 201.27 m is the measured vertical difference.
+          z_offset: 201.27
+          # The horizontal half of the same datum mismatch, which is why every Laguna box
+          # used to miss the car. Measured by pp_align_datum.py, which fits each car's
+          # odometry against that car's OWN GNSS and composes the two -- so neither fit
+          # depends on the other team's conventions, and there is none of the
+          # translation-vs-clock degeneracy that made points-in-box sweeps useless here.
+          #
+          # Two independent derivations agree: composed transform (+20.421, +30.426,
+          # -0.874) vs direct GNSS-minus-configured (+20.471, +30.123, -0.873). The
+          # composed yaw is +0.0335 deg, i.e. a pure translation.
+          map_offset_xyz: [20.421, 30.426, -0.874]
+
+model:
+  cfg_file: tools/cfgs/kitti_models/pointpillar_car.yaml
+  # Authoritative AV-24 box dims live in this cfg's anchor_sizes: 4.876 x 1.930 x 1.55.
+  checkpoint: ${LIDAR_OPENPCDET}/output/kitti_models/pointpillar_car/multitrack_run1/ckpt/checkpoint_epoch_30.pth
+  pretrained_model: ""
+
+pipeline:
+  # Stages: all, check, probe, data, train, eval, visualize, export.
+  # 'check' classifies each run's lidar rig against the av24 URDF; 'probe' measures GT
+  # boxes against real lidar points. Both are read-only and belong before a decode.
+  #
+  # Set to 'train' 2026-08-14: the probe gates have been reviewed, Laguna is unblocked,
+  # and the partial rebuilds (6537506, 6538079) passed pp_box_alignment on all 9 runs.
+  stages: train
+
+probe:
+  # Which runs pp_probe_boxes.py reports on, and how much of each it decodes. 200 frames
+  # at 10 Hz is a 20 s window centred on the closest approach -- enough to see the pass.
+  runs: all
+  max_frames: 200
+  window_seconds: 60.0
+
+dataset:
+  clean: true
+  max_frames: 0
+  stride: 1
+  # Minimum lidar points inside a GT box for it to be written as a label.
+  #
+  # Set explicitly because the fallback is 1: the value is normally read from
+  # filter_by_min_points under the gt_sampling augmentor, and this dataset does not use
+  # gt_sampling, so there is no entry to read. At 1, a box holding a single stray return
+  # became a positive label -- teaching the model that one point means "car", which is a
+  # direct route to the false positives the 27%-precision eval showed.
+  #
+  # 5 matches the OpenPCDet KITTI default. Measured cost on the probe windows: labels
+  # retained at >=10 points range from 71% (LVMS unimore, median 11 points at ~39 m) to
+  # 100% (IMS, LVMS 01_08); 5 is well inside that, and dropped frames become negatives,
+  # which helps precision again.
+  min_points_in_opponent_box: 5
+
+  # Decode gating. Odometry is loaded before any cloud is read, so we already know when an
+  # opponent was close enough to matter; everything else is decoded and thrown away.
+  # Measured over the six enabled runs, only 51% of run time has any opponent within
+  # 110 m, and on LVMS 2025_01_08 only 29% -- so roughly half the decode was waste.
+  #
+  # The gate must clear the grid's DIAGONAL, not its x extent, since a box can sit in a
+  # corner. RAISED 2026-08-14 alongside POINT_CLOUD_RANGE x -> +-149.76:
+  #   sqrt(149.76^2 + 53.12^2) = 158.9 m -> 170 m clears it with margin.
+  # (was 120.0 for the old +-99.84 grid, whose diagonal was 113.1 m)
+  #
+  # Beyond the grid a box is dropped by mask_points_and_boxes_outside_range anyway, so
+  # gating below the diagonal silently loses labels while gating above it only costs
+  # decode time. Set to 0 to disable and decode everything.
+  #
+  # NOTE this only takes effect for runs that are actually rebuilt. After the 2026-08-14
+  # partial rebuild, the four rebuilt runs carry frames out to 170 m while the other five
+  # still stop at 120 m, so long-range training data is skewed toward Putnam + IMS until
+  # the next full rebuild.
+  opponent_range_gate_m: 170.0
+  # Far stretches are still sampled, not skipped: they are where the empty frames that
+  # empty_train_fraction feeds on come from, and negatives are the defence against false
+  # positives. 2 s every 30 s is far more than the 0.20 ratio can consume.
+  far_sample_seconds: 2.0
+  far_sample_period_seconds: 30.0
+  empty_train_fraction: 0.20
+  empty_val_fraction: 0.20
+  chunk_seconds: 20.0
+  guard_seconds: 1.0
+  train_fraction: 0.85
+  test_fraction: 0.05
+
+cache:
+  enabled: true
+
+train:
+  batch_size: 4
+  # 30, not Jay's 80. He trained 80 epochs on ~15k frames; this dataset has 62k, so 30
+  # epochs already gives ~1.5x his total sample exposure. 80 here would be ~30 h of GPU
+  # for little gain and more overfitting risk on the over-represented tracks (Putnam and
+  # LVMS are ~38% of labels each, IMS only 10%).
+  epochs: 30
+  workers: 6
+
+evaluate:
+  batch_size: 4
+  score_thresh: 0.1
+
+visualize:
+  run_index: 0
+  start_seconds: null
+  duration_seconds: 100.0
+  stride: 1
+  out: ${LIDAR_OPENPCDET}/logs/multitrack_r150_run2/visualize.mcap
+  pred_topic: /kitti/pred_boxes
+
+export:
+  onnx_out_dir: ${LIDAR_OPENPCDET}/export_out
+  params_h: ${LIDAR_OPENPCDET}/export_out/params.h
+
+slurm:
+  partition: gpu
+  setup_gres: gpu:1
+  # A40 (48 GB, sm_86), NOT quadro_rtx_6000 (24 GB). MEASURED 2026-08-14: at
+  # POINT_CLOUD_RANGE +-149.76 the RTX 6000 OOMs at batch 4 (peak 20.5 GB of 23.46
+  # usable); the A40 runs it at 2.16 h/epoch vs 2.74 h forced down to batch 2 on the
+  # RTX 6000, and keeps batch_size 4 so LR 0.003 stays as tuned. batch 8 OOMs even on
+  # 48 GB. The H100 nodes are faster still but this CUDA 11.3 container only compiles to
+  # sm_86 and cannot target sm_90 without a rebuilt image.
+  pipeline_gres: gpu:nvidia_a40:1
+  setup_cpus: 4
+  pipeline_cpus: 6
+  setup_mem: 32G
+  pipeline_mem: 64G
+  setup_time: "01:00:00"
+  pipeline_time: "4-00:00:00"

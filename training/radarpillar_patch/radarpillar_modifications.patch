@@ -1,0 +1,516 @@
+diff --git a/pcdet/__init__.py b/pcdet/__init__.py
+index 9fdf7d2..5327c17 100644
+--- a/pcdet/__init__.py
++++ b/pcdet/__init__.py
+@@ -12,7 +12,12 @@ def get_git_commit_number():
+     if not (Path(__file__).parent / '../.git').exists():
+         return '0000000'
+ 
+-    cmd_out = subprocess.run(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE)
++    cmd_out = subprocess.run(
++        ['git', 'rev-parse', 'HEAD'],
++        cwd=Path(__file__).parent.parent,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.DEVNULL,
++    )
+     git_commit_number = cmd_out.stdout.decode('utf-8')[:7]
+     return git_commit_number
+ 
+diff --git a/pcdet/datasets/__init__.py b/pcdet/datasets/__init__.py
+index e656e1e..a93f291 100644
+--- a/pcdet/datasets/__init__.py
++++ b/pcdet/datasets/__init__.py
+@@ -5,19 +5,31 @@ from torch.utils.data import DistributedSampler as _DistributedSampler
+ from pcdet.utils import common_utils
+ 
+ from .dataset import DatasetTemplate
+-from .kitti.kitti_dataset import KittiDataset
+-from .nuscenes.nuscenes_dataset import NuScenesDataset
+-from .astyx.astyx_dataset import AstyxDataset
+-from .vod.vod_dataset import VodDataset
++from .radar.radar_dataset import RadarDataset
+ 
+ __all__ = {
+     'DatasetTemplate': DatasetTemplate,
+-    'KittiDataset': KittiDataset,
+-    'NuScenesDataset': NuScenesDataset,
+-    'AstyxDataset': AstyxDataset,
+-    'VodDataset': VodDataset
++    'RadarDataset': RadarDataset,
+ }
+ 
++# Keep optional datasets from forcing unrelated custom CUDA extensions into the
++# light-weight radar/PointPillar path.
++try:
++    from .nuscenes.nuscenes_dataset import NuScenesDataset
++    __all__['NuScenesDataset'] = NuScenesDataset
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .astyx.astyx_dataset import AstyxDataset
++    __all__['AstyxDataset'] = AstyxDataset
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .vod.vod_dataset import VodDataset
++    __all__['VodDataset'] = VodDataset
++except (ImportError, ModuleNotFoundError):
++    pass
++
+ 
+ class DistributedSampler(_DistributedSampler):
+ 
+diff --git a/pcdet/datasets/augmentor/data_augmentor.py b/pcdet/datasets/augmentor/data_augmentor.py
+index 9b41c7d..9956124 100644
+--- a/pcdet/datasets/augmentor/data_augmentor.py
++++ b/pcdet/datasets/augmentor/data_augmentor.py
+@@ -3,7 +3,7 @@ from functools import partial
+ import numpy as np
+ 
+ from ...utils import common_utils
+-from . import augmentor_utils, database_sampler
++from . import augmentor_utils
+ 
+ 
+ class DataAugmentor(object):
+@@ -24,6 +24,7 @@ class DataAugmentor(object):
+             self.data_augmentor_queue.append(cur_augmentor)
+ 
+     def gt_sampling(self, config=None):
++        from . import database_sampler
+         db_sampler = database_sampler.DataBaseSampler(
+             root_path=self.root_path,
+             sampler_cfg=config,
+diff --git a/pcdet/datasets/dataset.py b/pcdet/datasets/dataset.py
+index 902c873..17236e5 100644
+--- a/pcdet/datasets/dataset.py
++++ b/pcdet/datasets/dataset.py
+@@ -124,7 +124,8 @@ class DatasetTemplate(torch_data.Dataset):
+                     'gt_boxes_mask': gt_boxes_mask
+                 }
+             )
+-            if len(data_dict['gt_boxes']) == 0:
++            allow_empty_gt = bool(self.dataset_cfg.get('ALLOW_EMPTY_GT', False))
++            if len(data_dict['gt_boxes']) == 0 and not allow_empty_gt:
+                 new_index = np.random.randint(self.__len__())
+                 return self.__getitem__(new_index)
+ 
+diff --git a/pcdet/datasets/processor/data_processor.py b/pcdet/datasets/processor/data_processor.py
+index c322f60..cd86229 100644
+--- a/pcdet/datasets/processor/data_processor.py
++++ b/pcdet/datasets/processor/data_processor.py
+@@ -41,6 +41,38 @@ class DataProcessor(object):
+ 
+         return data_dict
+ 
++    @staticmethod
++    def _numpy_voxelize(points, voxel_size, point_cloud_range, max_points, max_voxels):
++        """Deterministic PointPillar voxelization fallback when spconv is absent."""
++        voxel_size = np.asarray(voxel_size, dtype=np.float32)
++        pc_range = np.asarray(point_cloud_range, dtype=np.float32)
++        xyz_coords = np.floor((points[:, :3] - pc_range[:3]) / voxel_size).astype(np.int32)
++        grid_size = np.floor((pc_range[3:6] - pc_range[:3]) / voxel_size).astype(np.int32)
++        valid = np.all((xyz_coords >= 0) & (xyz_coords < grid_size), axis=1)
++
++        voxels = np.zeros((max_voxels, max_points, points.shape[1]), dtype=points.dtype)
++        coordinates = np.zeros((max_voxels, 3), dtype=np.int32)
++        num_points = np.zeros(max_voxels, dtype=np.int32)
++        coord_to_index = {}
++        voxel_count = 0
++
++        for point, coord_xyz in zip(points[valid], xyz_coords[valid]):
++            coord_zyx = tuple(coord_xyz[::-1])
++            voxel_idx = coord_to_index.get(coord_zyx)
++            if voxel_idx is None:
++                if voxel_count >= max_voxels:
++                    continue
++                voxel_idx = voxel_count
++                coord_to_index[coord_zyx] = voxel_idx
++                coordinates[voxel_idx] = coord_zyx
++                voxel_count += 1
++            point_idx = num_points[voxel_idx]
++            if point_idx < max_points:
++                voxels[voxel_idx, point_idx] = point
++                num_points[voxel_idx] += 1
++
++        return voxels[:voxel_count], coordinates[:voxel_count], num_points[:voxel_count]
++
+     def transform_points_to_voxels(self, data_dict=None, config=None, voxel_generator=None, use_spconv2=False):
+         """
+         Supports both spconv 1.x (VoxelGenerator/VoxelGeneratorV2) and spconv 2.x (PointToVoxel).
+@@ -76,21 +108,32 @@ class DataProcessor(object):
+                 use_spconv2 = True
+             except Exception:
+                 try:
+-                    from spconv.utils import VoxelGeneratorV2 as VoxelGenerator  # spconv 1.x
++                    try:
++                        from spconv.utils import VoxelGeneratorV2 as VoxelGenerator  # spconv 1.x
++                    except Exception:
++                        from spconv.utils import VoxelGenerator
++                    voxel_generator = VoxelGenerator(
++                        voxel_size=config.VOXEL_SIZE,
++                        point_cloud_range=self.point_cloud_range,
++                        max_num_points=config.MAX_POINTS_PER_VOXEL,
++                        max_voxels=config.MAX_NUMBER_OF_VOXELS[self.mode]
++                    )
+                 except Exception:
+-                    from spconv.utils import VoxelGenerator  # fallback
+-                voxel_generator = VoxelGenerator(
+-                    voxel_size=config.VOXEL_SIZE,
+-                    point_cloud_range=self.point_cloud_range,
+-                    max_num_points=config.MAX_POINTS_PER_VOXEL,
+-                    max_voxels=config.MAX_NUMBER_OF_VOXELS[self.mode]
+-                )
+-
+-        if isinstance(voxel_generator, tuple):
++                    voxel_generator = 'numpy'
++
++        if voxel_generator == 'numpy':
++            voxels, coordinates, num_points = self._numpy_voxelize(
++                pts,
++                config.VOXEL_SIZE,
++                self.point_cloud_range,
++                config.MAX_POINTS_PER_VOXEL,
++                config.MAX_NUMBER_OF_VOXELS[self.mode],
++            )
++        elif isinstance(voxel_generator, tuple):
+             # should not happen, kept for safety
+             voxel_generator = voxel_generator[0]
+ 
+-        if hasattr(voxel_generator, 'generate'):
++        if voxel_generator != 'numpy' and hasattr(voxel_generator, 'generate'):
+             # spconv 1.x path
+             voxel_output = voxel_generator.generate(pts)
+             if isinstance(voxel_output, dict):
+@@ -98,7 +141,7 @@ class DataProcessor(object):
+                     voxel_output['voxels'], voxel_output['coordinates'], voxel_output['num_points_per_voxel']
+             else:
+                 voxels, coordinates, num_points = voxel_output
+-        elif use_spconv2:
++        elif voxel_generator != 'numpy' and use_spconv2:
+             # spconv 2.x PointToVoxel path expects torch tensors
+             if points_tensor is None:
+                 pts_t = torch.from_numpy(pts).float()
+diff --git a/pcdet/models/backbones_3d/__init__.py b/pcdet/models/backbones_3d/__init__.py
+index 3005140..eab76a6 100644
+--- a/pcdet/models/backbones_3d/__init__.py
++++ b/pcdet/models/backbones_3d/__init__.py
+@@ -1,13 +1,23 @@
+-from .pointnet2_backbone import PointNet2Backbone, PointNet2MSG
+ from .pillar_attention import PillarAttention
+-from .spconv_backbone import VoxelBackBone8x, VoxelResBackBone8x
+-from .spconv_unet import UNetV2
+ 
+ __all__ = {
+-    'VoxelBackBone8x': VoxelBackBone8x,
+-    'UNetV2': UNetV2,
+-    'PointNet2Backbone': PointNet2Backbone,
+-    'PointNet2MSG': PointNet2MSG,
+     'PillarAttention': PillarAttention,
+-    'VoxelResBackBone8x': VoxelResBackBone8x,
+ }
++
++# These backbones are not used by PointPillar and require spconv/PointNet CUDA
++# extensions. Register them only when their optional dependencies are present.
++try:
++    from .pointnet2_backbone import PointNet2Backbone, PointNet2MSG
++    __all__.update(PointNet2Backbone=PointNet2Backbone, PointNet2MSG=PointNet2MSG)
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .spconv_backbone import VoxelBackBone8x, VoxelResBackBone8x
++    from .spconv_unet import UNetV2
++    __all__.update(
++        VoxelBackBone8x=VoxelBackBone8x,
++        VoxelResBackBone8x=VoxelResBackBone8x,
++        UNetV2=UNetV2,
++    )
++except (ImportError, ModuleNotFoundError):
++    pass
+diff --git a/pcdet/models/backbones_3d/pfe/__init__.py b/pcdet/models/backbones_3d/pfe/__init__.py
+index b65a3f5..2f26f8f 100644
+--- a/pcdet/models/backbones_3d/pfe/__init__.py
++++ b/pcdet/models/backbones_3d/pfe/__init__.py
+@@ -1,5 +1,7 @@
+-from .voxel_set_abstraction import VoxelSetAbstraction
++__all__ = {}
+ 
+-__all__ = {
+-    'VoxelSetAbstraction': VoxelSetAbstraction
+-}
++try:
++    from .voxel_set_abstraction import VoxelSetAbstraction
++    __all__['VoxelSetAbstraction'] = VoxelSetAbstraction
++except (ImportError, ModuleNotFoundError):
++    pass
+diff --git a/pcdet/models/dense_heads/__init__.py b/pcdet/models/dense_heads/__init__.py
+index b5773e8..e6e1a70 100644
+--- a/pcdet/models/dense_heads/__init__.py
++++ b/pcdet/models/dense_heads/__init__.py
+@@ -1,17 +1,13 @@
+-from .anchor_head_multi import AnchorHeadMulti
+ from .anchor_head_single import AnchorHeadSingle
+ from .anchor_head_template import AnchorHeadTemplate
+-from .point_head_box import PointHeadBox
+-from .point_head_simple import PointHeadSimple
+-from .point_intra_part_head import PointIntraPartOffsetHead
+-from .point_seg_head import PointSegHead
+ 
+ __all__ = {
+     'AnchorHeadTemplate': AnchorHeadTemplate,
+     'AnchorHeadSingle': AnchorHeadSingle,
+-    'PointIntraPartOffsetHead': PointIntraPartOffsetHead,
+-    'PointHeadSimple': PointHeadSimple,
+-    'PointHeadBox': PointHeadBox,
+-    'AnchorHeadMulti': AnchorHeadMulti,
+-    'PointSegHead': PointSegHead
+ }
++
++try:
++    from .anchor_head_multi import AnchorHeadMulti
++    __all__['AnchorHeadMulti'] = AnchorHeadMulti
++except (ImportError, ModuleNotFoundError):
++    pass
+diff --git a/pcdet/models/detectors/__init__.py b/pcdet/models/detectors/__init__.py
+index c234b85..d14446b 100644
+--- a/pcdet/models/detectors/__init__.py
++++ b/pcdet/models/detectors/__init__.py
+@@ -1,21 +1,14 @@
+ from .detector3d_template import Detector3DTemplate
+-from .PartA2_net import PartA2Net
+-from .point_rcnn import PointRCNN
+ from .pointpillar import PointPillar
+-from .pv_rcnn import PVRCNN
+-from .second_net import SECONDNet
+-from .pointnet_seg import PointNetSeg
+ 
+ __all__ = {
+     'Detector3DTemplate': Detector3DTemplate,
+-    'SECONDNet': SECONDNet,
+-    'PartA2Net': PartA2Net,
+-    'PVRCNN': PVRCNN,
+     'PointPillar': PointPillar,
+-    'PointRCNN': PointRCNN,
+-    'PointNetSeg': PointNetSeg
+ }
+ 
++# The integration uses PointPillar. Other detector families depend on optional
++# custom CUDA operators and should not make this model's imports fail.
++
+ 
+ def build_detector(model_cfg, num_class, dataset):
+     model = __all__[model_cfg.NAME](
+diff --git a/pcdet/models/detectors/detector3d_template.py b/pcdet/models/detectors/detector3d_template.py
+index ff514a0..710576a 100644
+--- a/pcdet/models/detectors/detector3d_template.py
++++ b/pcdet/models/detectors/detector3d_template.py
+@@ -323,7 +323,10 @@ class Detector3DTemplate(nn.Module):
+ 
+         logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
+         loc_type = torch.device('cpu') if to_cpu else None
+-        checkpoint = torch.load(filename, map_location=loc_type)
++        # torch>=2.6 defaults to weights_only=True, which rejects the numpy
++        # scalars this repo stores alongside the weights. These checkpoints are
++        # produced by this pipeline's own train.py, so a full load is fine.
++        checkpoint = torch.load(filename, map_location=loc_type, weights_only=False)
+         model_state_disk = checkpoint['model_state']
+ 
+         if 'version' in checkpoint:
+@@ -351,7 +354,8 @@ class Detector3DTemplate(nn.Module):
+ 
+         logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
+         loc_type = torch.device('cpu') if to_cpu else None
+-        checkpoint = torch.load(filename, map_location=loc_type)
++        # See load_params_from_file: torch>=2.6 needs weights_only=False here.
++        checkpoint = torch.load(filename, map_location=loc_type, weights_only=False)
+         epoch = checkpoint.get('epoch', -1)
+         it = checkpoint.get('it', 0.0)
+ 
+@@ -367,7 +371,8 @@ class Detector3DTemplate(nn.Module):
+                 src_file, ext = filename[:-4], filename[-3:]
+                 optimizer_filename = '%s_optim.%s' % (src_file, ext)
+                 if os.path.exists(optimizer_filename):
+-                    optimizer_ckpt = torch.load(optimizer_filename, map_location=loc_type)
++                    optimizer_ckpt = torch.load(optimizer_filename, map_location=loc_type,
++                                                weights_only=False)
+                     optimizer.load_state_dict(optimizer_ckpt['optimizer_state'])
+ 
+         if 'version' in checkpoint:
+diff --git a/pcdet/models/roi_heads/__init__.py b/pcdet/models/roi_heads/__init__.py
+index bf7d584..c0c7022 100644
+--- a/pcdet/models/roi_heads/__init__.py
++++ b/pcdet/models/roi_heads/__init__.py
+@@ -1,11 +1,24 @@
+-from .partA2_head import PartA2FCHead
+-from .pointrcnn_head import PointRCNNHead
+-from .pvrcnn_head import PVRCNNHead
+-from .roi_head_template import RoIHeadTemplate
++__all__ = {}
+ 
+-__all__ = {
+-    'RoIHeadTemplate': RoIHeadTemplate,
+-    'PartA2FCHead': PartA2FCHead,
+-    'PVRCNNHead': PVRCNNHead,
+-    'PointRCNNHead': PointRCNNHead
+-}
++# PointPillar has no ROI head. Avoid importing optional spconv and PointNet
++# kernels unless a two-stage detector actually requests them.
++try:
++    from .roi_head_template import RoIHeadTemplate
++    __all__['RoIHeadTemplate'] = RoIHeadTemplate
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .partA2_head import PartA2FCHead
++    __all__['PartA2FCHead'] = PartA2FCHead
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .pointrcnn_head import PointRCNNHead
++    __all__['PointRCNNHead'] = PointRCNNHead
++except (ImportError, ModuleNotFoundError):
++    pass
++try:
++    from .pvrcnn_head import PVRCNNHead
++    __all__['PVRCNNHead'] = PVRCNNHead
++except (ImportError, ModuleNotFoundError):
++    pass
+diff --git a/pcdet/utils/box_utils.py b/pcdet/utils/box_utils.py
+index 1e57239..de4f327 100644
+--- a/pcdet/utils/box_utils.py
++++ b/pcdet/utils/box_utils.py
+@@ -3,7 +3,6 @@ import scipy
+ import torch
+ from scipy.spatial import Delaunay
+ 
+-from ..ops.roiaware_pool3d import roiaware_pool3d_utils
+ from . import common_utils
+ 
+ 
+@@ -80,6 +79,8 @@ def remove_points_in_boxes3d(points, boxes3d):
+     Returns:
+ 
+     """
++    from ..ops.roiaware_pool3d import roiaware_pool3d_utils
++
+     boxes3d, is_numpy = common_utils.check_numpy_to_torch(boxes3d)
+     points, is_numpy = common_utils.check_numpy_to_torch(points)
+     point_masks = roiaware_pool3d_utils.points_in_boxes_cpu(points[:, 0:3], boxes3d)
+diff --git a/tools/eval_utils/eval_pointseg.py b/tools/eval_utils/eval_pointseg.py
+index fe163e2..446f5d7 100644
+--- a/tools/eval_utils/eval_pointseg.py
++++ b/tools/eval_utils/eval_pointseg.py
+@@ -6,11 +6,14 @@ import numpy as np
+ 
+ from pcdet.models import load_data_to_gpu
+ from pcdet.utils import box_utils
+-from pcdet.datasets.kitti.kitti_object_eval_python.eval import print_str
+ 
+ 
+ 
+ def eval_one_epoch_seg(cfg, model, dataloader, epoch_id, logger, dist_test=False, save_to_file=False, result_dir=None):
++    # kitti eval is only needed by the segmentation path; it is not vendored here since
++    # the nuScenes migration, so importing it lazily keeps test.py usable for detection.
++    from pcdet.datasets.kitti.kitti_object_eval_python.eval import print_str
++
+     result_dir.mkdir(parents=True, exist_ok=True)
+ 
+     final_output_dir = result_dir / 'final_result' / 'data'
+diff --git a/tools/train.py b/tools/train.py
+index d721599..a30fa59 100644
+--- a/tools/train.py
++++ b/tools/train.py
+@@ -3,8 +3,6 @@ import datetime
+ import glob
+ import os
+ from pathlib import Path
+-from test import repeat_eval_ckpt
+-from eval_utils.eval_utils import eval_one_epoch
+ 
+ import torch
+ import torch.distributed as dist
+@@ -48,6 +46,8 @@ def parse_config():
+     parser.add_argument('--start_epoch', type=int, default=0, help='')
+     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
+     parser.add_argument('--use_wandb', action='store_true', default=False, help='whether to use wandb')
++    parser.add_argument('--skip_eval', action='store_true', default=False,
++                        help='train/checkpoint only; avoids the optional Numba CUDA evaluator')
+ 
+     args = parser.parse_args()
+ 
+@@ -187,7 +187,7 @@ def main():
+ 
+     eval_loader = None
+     eval_output_dir = None
+-    if early_stop_cfg is not None and _get_cfg(early_stop_cfg, 'ENABLED', False):
++    if not args.skip_eval and early_stop_cfg is not None and _get_cfg(early_stop_cfg, 'ENABLED', False):
+         _, eval_loader, _ = build_dataloader(
+             dataset_cfg=cfg.DATA_CONFIG,
+             class_names=cfg.CLASS_NAMES,
+@@ -198,6 +198,7 @@ def main():
+         eval_output_dir.mkdir(parents=True, exist_ok=True)
+ 
+     def eval_func(model_to_eval, dataloader, epoch_id, result_dir, dist_test=False):
++        from eval_utils.eval_utils import eval_one_epoch
+         return eval_one_epoch(
+             cfg, model_to_eval, dataloader, epoch_id, logger, dist_test=dist_test,
+             save_to_file=False, result_dir=result_dir
+@@ -237,25 +238,28 @@ def main():
+     logger.info('**********************End training %s/%s(%s)**********************\n\n\n'
+                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
+ 
+-    logger.info('**********************Start evaluation %s/%s(%s)**********************' %
+-                (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
+-    test_set, test_loader, sampler = build_dataloader(
+-        dataset_cfg=cfg.DATA_CONFIG,
+-        class_names=cfg.CLASS_NAMES,
+-        batch_size=args.batch_size,
+-        dist=dist_train, workers=args.workers, logger=logger, training=False
+-    )
+-    eval_output_dir = output_dir / 'eval' / 'eval_with_train'
+-    eval_output_dir.mkdir(parents=True, exist_ok=True)
+-    args.start_epoch = max(args.epochs - 10, 0)  # Only evaluate the last 10 epochs
++    if not args.skip_eval:
++        from test import repeat_eval_ckpt
+ 
+-    repeat_eval_ckpt(
+-        model.module if dist_train else model,
+-        test_loader, args, eval_output_dir, logger, ckpt_dir,
+-        dist_test=dist_train
+-    )
+-    logger.info('**********************End evaluation %s/%s(%s)**********************' %
+-                (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
++        logger.info('**********************Start evaluation %s/%s(%s)**********************' %
++                    (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
++        test_set, test_loader, sampler = build_dataloader(
++            dataset_cfg=cfg.DATA_CONFIG,
++            class_names=cfg.CLASS_NAMES,
++            batch_size=args.batch_size,
++            dist=dist_train, workers=args.workers, logger=logger, training=False
++        )
++        eval_output_dir = output_dir / 'eval' / 'eval_with_train'
++        eval_output_dir.mkdir(parents=True, exist_ok=True)
++        args.start_epoch = max(args.epochs - 10, 0)  # Only evaluate the last 10 epochs
++
++        repeat_eval_ckpt(
++            model.module if dist_train else model,
++            test_loader, args, eval_output_dir, logger, ckpt_dir,
++            dist_test=dist_train
++        )
++        logger.info('**********************End evaluation %s/%s(%s)**********************' %
++                    (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/tools/train_utils/optimization/fastai_optim.py b/tools/train_utils/optimization/fastai_optim.py
+index 5c54135..4509f7b 100644
+--- a/tools/train_utils/optimization/fastai_optim.py
++++ b/tools/train_utils/optimization/fastai_optim.py
+@@ -1,6 +1,6 @@
+ # This file is modified from https://github.com/traveller59/second.pytorch
+ 
+-from collections import Iterable
++from collections.abc import Iterable
+ 
+ import torch
+ from torch import nn

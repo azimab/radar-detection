@@ -1,0 +1,7 @@
+# on top of ../requirements.txt; RadarPillar/OpenPCDet itself is built from its own repo
+torch>=2.11
+easydict
+numba
+tensorboardX
+scikit-image
+scikit-learn>=1.7

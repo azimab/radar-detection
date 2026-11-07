@@ -1,0 +1,61 @@
+# Template for a new recording. Copy to config/runs/<name>.yaml (the file name must
+# match `name`), fill it in, then add <name> to the end of `runs:` in config/pipeline.yaml.
+# The README's "Add a recording" section walks through the whole loop.
+name: <venue>_<yyyy>_<mm>_<dd>_rear
+location: <track>          # nuScenes log.location, e.g. laguna-seca, putnam-park
+# train | val | test, or trainval (split in time by dataset.split.train_fraction).
+# Keep the splits run-blocked: a recording should not feed both train and val.
+split: train
+
+# --- bags ----------------------------------------------------------------------------
+radar_mcap: ${AV24_DATA}/raw/<...>/no_lidar_0.mcap
+radar_topic: /radar_rear/frgen21/pointcloud   # older bags: /frgen21/pointcloud
+ego_odom_mcap: ${AV24_DATA}/raw/<...>/no_lidar_0.mcap   # has /vehicle/uva_odometry
+tf_mcap: ${AV24_DATA}/raw/<...>/no_lidar_0.mcap         # has /tf_static
+target_frame: rear_axle_middle
+# Names the rear radar's frame may have in this bag's tf_static.
+sensor_frame_aliases: [radar_rear, frgen21, radar_rear_zf]
+
+# --- calibration ---------------------------------------------------------------------
+# Start from these values, build, then adjust from the validator (README: "Calibrate").
+# Which radar clock to align on: `header` if the FRGen21 header stamp tracks log time
+# (a steady few-tens-of-ms lag), else `log` (header is time-since-boot or runs fast).
+time_source: log
+# Fit with `build_nuscenes_dataset.py sweep-clock --run <name>`. Only change it when the
+# lateral spread and the >1 m-sideways rate improve together.
+radar_time_offset_seconds: 0.0
+# Moves the GT box along the opponent's heading. Fit from the validator's near_edge gate:
+# new value ~= old value + shortfall_m, then check the URDF window still holds.
+box_center_forward_offset_m: 0.0
+# Opponent clock error. Required; 0.0 unless measured (see calibration_history.md).
+opponent_time_offset_seconds: 0.0
+# Where the opponent's odometry is reported from: center_of_gravity, novatel_midpoint or
+# top_antenna. Only the validator's URDF window check uses it.
+opponent_pose_origin: center_of_gravity
+
+# --- odometry timelines ----------------------------------------------------------------
+# Option A: the run already exists in the shared lidar run config
+# (third_party/openpcdet_geometry/tools/pp_run_config_multitrack.yaml). Name it:
+multitrack_run: <shared_run_name>
+#
+# Option B: it does not. Name it, and define it here in the shared format; it is appended
+# to the builder's private copy of the run config. A name the shared config already has
+# is refused. Delete this block for option A.
+multitrack:
+  ego_odom:
+    - ${AV24_DATA}/raw/<...>/no_lidar_0.mcap
+  # fused_lidar: optional here (never read by this builder; defaults to ego_odom)
+  fuse_raw: true
+  tf_static:
+    - ${AV24_DATA}/raw/<...>/no_lidar_0.mcap
+  # ego_yaw_correction_deg: 0.0
+  opponents:
+    - name: <team>
+      odom:
+        - ${AV24_DATA}/raw/<...>/opponent.mcap
+      odom_topic: /opponent/gps
+      # The opponent's map frame vs ours. Measure with the lidar checkout's
+      #   ${LIDAR_OPENPCDET}/tools/pp_align_datum.py
+      # and record the command and residuals in a comment, as laguna_2026_07_25_rear does.
+      map_offset_xyz: [0.0, 0.0, 0.0]
+      z_offset: 0.0

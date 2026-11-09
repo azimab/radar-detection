@@ -1,6 +1,6 @@
 # Training and evaluation
 
-Setup and run commands are in the top-level [README.md](../README.md) (sections 1, 5 and 6).
+Setup and run commands are in [../docs/USAGE.md](../docs/USAGE.md) (sections 1, 5 and 6).
 This file explains what is in this folder.
 
 The model code is not in this repo. It is upstream RadarPillar plus our changes:
@@ -31,11 +31,6 @@ training) or the build a run trained on (for eval, from its `dataset.txt`). A ne
 therefore needs no new config file. Add a config only to change the model, schedule,
 augmentation or splits. Put it in `cfgs/models/` or `cfgs/datasets/`, then rerun
 `install_openpcdet_extension.py`.
-
-The retired v1–v5, test, train-probe and Laguna-holdout configs are in
-[../notes/configs_archive/](../notes/configs_archive/). `install_openpcdet_extension.py --archive`
-installs them too, e.g. to re-evaluate an old run. [../notes/RESULTS.md](../notes/RESULTS.md)
-says which model each version was.
 
 ## Scripts
 

@@ -179,11 +179,8 @@ def novatel_midpoint_in(rig: Av24Rig, target: str = RAM) -> np.ndarray:
 
 # --- what the URDF can and cannot say about the car's outline -------------------------
 #
-# The URDF declares no body geometry. Its only visual is a mesh
-# (``package://il15_description/visual/il15.dae``), and that package is not resolvable
-# here -- checked 2026-09-20 against the car-stack checkout (whose only mesh is the
-# FRGen21's own STL), the colcon install/ and build/ trees, and $HOME; there is no
-# system ROS install. So the AV-24's extents cannot be read off it. What it does give is hard
+# The URDF declares no body geometry (its only visual is a mesh that is not available
+# here), so the AV-24's extents cannot be read off it. What it does give is hard
 # points the body must contain: the GNSS nose antenna is mounted on the nose, so the
 # front of the car reaches at least that far forward, and the rear radar is mounted in
 # the rear bodywork, so the back reaches at least that far back. Those two turn a known

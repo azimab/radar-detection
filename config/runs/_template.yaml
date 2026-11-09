@@ -27,7 +27,7 @@ radar_time_offset_seconds: 0.0
 # Moves the GT box along the opponent's heading. Fit from the validator's near_edge gate:
 # new value ~= old value + shortfall_m, then check the URDF window still holds.
 box_center_forward_offset_m: 0.0
-# Opponent clock error. Required; 0.0 unless measured (see calibration_history.md).
+# Opponent clock error. Required; 0.0 unless measured.
 opponent_time_offset_seconds: 0.0
 # Where the opponent's odometry is reported from: center_of_gravity, novatel_midpoint or
 # top_antenna. Only the validator's URDF window check uses it.

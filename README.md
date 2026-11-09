@@ -1,80 +1,106 @@
-# Rear-radar car detection (AV-24)
+# Rear-Radar Car Detection for Autonomous Racing
 
-Results and known issues: [notes/RESULTS.md](notes/RESULTS.md).
+Detecting the car behind us at racing speed, using only a 4D imaging radar.
 
-## 1. Set up (once)
+![Live rear-radar detection at Laguna Seca](docs/demo.gif)
 
-```bash
-git clone <this repo> radar_openpcdet && cd radar_openpcdet && mkdir -p logs training/logs
-pip install -r requirements.txt
-export AV24_DATA=<root of the recorded bags>          # used by config/runs/*.yaml
-export LIDAR_OPENPCDET=<lidar OpenPCDet checkout>     # source of the shared odometry caches
-python3 seed_odom_cache.py
-```
+*Left: rear radar returns (dots) with the detector's output box and score. Right: the rear
+camera, shown for reference only; the model never sees it. Recorded at Laguna Seca on a
+session the model was not trained on. Played at 4× speed.*
 
-No `pip` on the portal nodes? See [vendor/README.md](vendor/README.md).
+## The problem
 
-To train, also set up RadarPillar from `training/`:
+In head-to-head autonomous racing, the AV-24 race car has to know where the car behind it is.
+That information drives defending, merging back onto the racing line, and staying safe
+while being overtaken. The rear is covered by a ZF FRGen21 **4D imaging radar** (x, y, z plus Doppler velocity, at 16 Hz).
 
-```bash
-cd training
-git clone https://github.com/fthbng77/RadarPillar.git vendor/RadarPillar && git -C vendor/RadarPillar checkout eb52eb0
-git -C vendor/RadarPillar apply ../../radarpillar_patch/radarpillar_modifications.patch
-cp radarpillar_patch/files/setup_iou3d_nms.py vendor/RadarPillar/
-python3 install_openpcdet_extension.py
-pip install -r requirements.txt
-```
+Radar is a hard input for a detector:
 
-Rerun `install_openpcdet_extension.py` whenever you change `training/openpcdet_extension/`.
+- **Sparse and noisy.** A car 40 m back may return only a handful of points, and the
+  elevation is too noisy to trust.
+- **Cluttered.** Walls, barriers and kerbs return far more points than the opponent does.
+- **Doppler folding.** Above about 20 m/s of ego speed, the sensor's velocity reading wraps
+  around. Stationary clutter can then look like a moving target unless this is corrected.
+- **No labelled data.** No public dataset covers a race-car rear radar at race speed. Every
+  label had to be generated.
 
-## 2. Add a recording
+The goal is a detector that reports the opponent's position (a 3D box and a confidence
+score) in real time. Its output feeds a Kalman tracker on the car.
 
-1. `cp config/runs/_template.yaml config/runs/<venue>_<yyyy>_<mm>_<dd>_rear.yaml` and fill it in
-   (file name must equal `name:`).
-2. Add the name to the end of `runs:` in `config/pipeline.yaml` and bump `dataset.output_root`.
-3. Decode it (once per run): `sbatch build_nuscenes_dataset.slurm <run>`
+## How it works
 
-## 3. Build and check
+### 1. Automatic labelling from both cars' odometry
 
-```bash
-python3 build_nuscenes_dataset.py label --overwrite   # ~10 min, no bag reads
-python3 validate_nuscenes_dataset.py                  # must end in PASSED
-python3 visualize_nuscenes.py --per-run 6 --qa-dropped 4   # BEV images in <build>/viz/
-```
+Labelling radar by hand isn't practical, so the opponent cars' own odometry (GNSS/INS)
+is recorded alongside ours. The pipeline in
+[`build_nuscenes_dataset.py`](build_nuscenes_dataset.py) then:
 
-## 4. Calibrate (if labels look off)
+- aligns the two cars' clocks and map frames, and puts a car-sized box at the opponent's
+  pose in our rear-axle frame;
+- corrects each radar point's Doppler for ego motion (including the yaw-rate lever arm) and
+  undoes velocity folding;
+- keeps a frame as a positive only if the box contains returns that are actually moving,
+  so a box drawn over a wall is never labelled as a car;
+- runs quality gates that catch bad labels automatically, such as boxes that sit sideways
+  of the opponent's returns, or returns that stop short of the box's near face;
+- writes everything in the **nuScenes v1.0** format, with sweeps, splits and 20%
+  "no car behind" background frames.
 
-Edit `config/runs/<run>.yaml` under `# --- calibration`, then rerun step 3. Read and update
-[notes/calibration_history.md](notes/calibration_history.md) when you change a value.
+Sensor mounting comes from the car's URDF, and per-session calibration (clock source,
+time offsets, box offsets) lives in [`config/runs/`](config/runs). A separate validator,
+[`validate_nuscenes_dataset.py`](validate_nuscenes_dataset.py), reads the whole dataset
+back through the official nuScenes devkit and checks the schema, point files, labels and
+splits.
 
-| symptom | change |
+### 2. Model: RadarPillar
+
+The detector is [RadarPillar](https://github.com/fthbng77/RadarPillar), a PointPillars
+variant for 4D radar, built on OpenPCDet. It's adapted in
+[`training/`](training) with:
+
+- **4 stacked scans** (about 0.19 s). The opponent follows at nearly our speed, so its
+  returns stay aligned across scans while static clutter smears out.
+- **Doppler-consistent augmentation.** Ordinary flips and rotations would make the
+  velocity features physically wrong, so the custom augmentations re-project the radial
+  velocity after every geometric transform.
+- **A centre-distance metric** (AP at a 1 m match) alongside BEV IoU. The tracker consumes
+  box centres, and IoU is harsh on along-track error for a 4.9 m car.
+
+### 3. Live ROS 2 node
+
+[`live/`](live) re-implements the trained network and its post-processing in plain
+PyTorch. It runs on a laptop CPU with no GPU or OpenPCDet, at **40–55 ms per scan**, well
+inside the radar's 62 ms frame time. It publishes detections, RViz/Foxglove markers and a
+status topic.
+
+## Data and results
+
+Each split is a different session, so train and test never share a lap:
+
+| split | track | opponent | scenes | samples |
+|---|---|---|---:|---:|
+| train | Laguna Seca (2 sessions) | Purdue, IU | 136 | 13,869 |
+| val | Putnam Park | Caltech | 22 | 2,587 |
+| test (held out) | Putnam Park | IU | 43 | 456 |
+
+On validation, which is a **different track** from training, the current model reaches
+about **75 centre-distance AP at 1 m**. Scored on unseen sessions from the training
+track, earlier versions reached about 92. The gap shows that generalising to a new
+track, not fitting, is the open problem.
+
+## Repository layout
+
+| path | what it is |
 |---|---|
-| near-edge gate fails / `shortfall_m` far from 0 | `box_center_forward_offset_m` ≈ old + `shortfall_m` |
-| box lag scales with speed | `build_nuscenes_dataset.py sweep-clock --run <run> --sweep -0.2 0.2 0.01`, then `radar_time_offset_seconds` |
-| stamps wildly off log time | `time_source: log` |
-| constant metres-scale shift | `multitrack.opponents[].map_offset_xyz` |
-| rules for every run (Doppler, min points, QA gates) | `config/pipeline.yaml` |
+| `build_nuscenes_dataset.py` | decode bags, auto-label, write the nuScenes dataset |
+| `validate_nuscenes_dataset.py` | end-to-end checks through the nuScenes devkit |
+| `visualize_nuscenes.py` | bird's-eye-view images of labels for QA |
+| `av24_geometry.py` | car and sensor geometry from the AV-24 URDF |
+| `config/` | pipeline policy and per-session calibration |
+| `training/` | RadarPillar patch, radar dataset, augmentation, evaluator, Slurm jobs |
+| `live/` | real-time ROS 2 detector node and model export |
+| `third_party/` | vendored car URDF and shared odometry/geometry code |
 
-## 5. Train
+Build, training and deployment commands are in [docs/USAGE.md](docs/USAGE.md).
 
-From `training/` (args: `<run-tag> <epochs> <batch-size> [seed] [model-cfg] [dataset]`):
-
-```bash
-for seed in 1 2 3; do sbatch train_rear_radarpillar.slurm rear_radarpillar_v6 35 4 $seed; done
-```
-
-Use a new run tag per build. Defaults to the build named in `config/pipeline.yaml`.
-
-## 6. Evaluate
-
-From `training/` (args: `<run-tag-with-seed> <batch-size> [model-cfg] [split] [dataset]`):
-
-```bash
-sbatch eval_rear_radarpillar.slurm rear_radarpillar_v6_seed1 4
-```
-
-More tools: [training/README.md](training/README.md).
-
-## 7. Run live
-
-See [live/README.md](live/README.md).
+**Stack:** Python, PyTorch, OpenPCDet, ROS 2, nuScenes devkit, NumPy, Slurm (HPC GPU training).

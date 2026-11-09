@@ -460,8 +460,8 @@ class Geometry:
         if not np.allclose(self.pp.T_COG_RAM[:3, :3], np.eye(3)):
             raise ValueError("T_COG_RAM has a rotation; the body twist needs rotating too")
         # Every run's box_center_forward_offset_m is measured on top of the shared
-        # checkout's box origin. If that origin moves, every label moves with it
-        # (2026-09-27: OPP_REAR_OVERHANG moved it 1.0 m back), so pin it and fail loudly.
+        # checkout's box origin. If that origin moves, every label moves with it, so pin
+        # it and fail loudly.
         expected = float(config["openpcdet"]["expected_box_center_x_in_ram_m"])
         actual = av24_geometry.pp_box_center_in_ram(self.pp)
         if abs(actual - expected) > 1e-6:
@@ -818,7 +818,7 @@ def opponent_near_face_residual(
 def lateral_qa_spans(frames: list[Frame], gate: dict[str, Any]) -> list[tuple[float, float, float]]:
     """Time spans where the label box sits persistently sideways of the opponent's returns.
 
-    Found on Caltech (2026-09-21): four episodes, 1.5-10 s each, where the box sat
+    Found on Caltech: four episodes, 1.5-10 s each, where the box sat
     ~1.1 m to one side of the returns while every other frame matched Laguna's
     residuals. Radar clock, ego heading and the fitted forward offset were each ruled
     out, which leaves the opponent's own /opponent/gps position; a persistent offset
@@ -832,7 +832,7 @@ def lateral_qa_spans(frames: list[Frame], gate: dict[str, Any]) -> list[tuple[fl
 def along_qa_spans(frames: list[Frame], gate: dict[str, Any]) -> list[tuple[float, float, float]]:
     """Time spans where the label box sits persistently displaced along its length.
 
-    The along-track counterpart of ``lateral_qa_spans``. Found on Caltech (2026-09-28):
+    The along-track counterpart of ``lateral_qa_spans``. Found on Caltech:
     in scene rear-013 the opponent's returns stopped ~1.3 m short of the box's near face
     for its whole close approach (21 m to 3 m), while every other Caltech scene and
     Laguna at the same ranges sat within ~0.3 m of it. The offset did not scale with
@@ -1347,10 +1347,9 @@ class NuScenesWriter:
             }
 
         # Every scan within the stacking window before a keyframe is written as a sweep
-        # of it, so background keyframes get the same history as positives (before
-        # 2026-10-02 only selected scans were written, and the sweep chain skipped
-        # straight to the previous *selected* scan: positives sit in dense runs and got
-        # full stacks, sparse background mostly got none).
+        # of it, so background keyframes get the same history as positives. Chaining only
+        # selected scans would give dense positives full stacks and sparse background none,
+        # a label leak the model can learn.
         keys_ns = np.array([f.stamp_ns for f in frames], dtype=np.int64)
         if np.any(np.diff(keys_ns) <= 0):
             raise AssertionError(f"{run}: keyframes must be in strictly increasing time order")

@@ -1,8 +1,7 @@
 # Rear-radar car dataset (nuScenes v1.0 format): label policy, gates and the runs to build.
 #
 # One file per recording lives in config/runs/<name>.yaml. Only the runs listed under
-# `runs:` at the bottom are built. The reasoning behind every measured value here is in
-# notes/calibration_history.md -- read it before changing one.
+# `runs:` at the bottom are built.
 #
 # ${VAR} / ${VAR:-default} are expanded from the environment. Relative paths are taken
 # relative to the repository root.
@@ -22,7 +21,7 @@ dataset:
     max_lag_s: 0.5            # >= the training cfg's MAX_SWEEP_LAG_S
     check_depth: 3            # validator: NUM_SWEEPS - 1 of the training cfg
     max_full_stack_gap: 0.05  # validator: full-stack rate, background vs positives
-  # Sensor mounting is read from the URDF, not from the bags (they disagree; see history).
+  # Sensor mounting is read from the URDF, not from the bags (they disagree).
   av24_urdf: ${AV24_URDF:-third_party/av24_urdf/av24.urdf}   # pinned copy of the car's URDF
   sensor_extrinsic_tolerance_m: 0.01   # bag tf_static vs URDF translation; refuses beyond
   feature_names:

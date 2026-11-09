@@ -9,7 +9,7 @@ directory instead and copies the caches it needs into it. Nothing in the shared
 checkout is ever written.
 
 One wrinkle needs an explicit decision rather than a silent workaround. The
-Laguna cache was built before that run's bags were reorganised on 2026-08-13,
+Laguna cache was built before that run's bags were reorganised,
 so its stored fingerprint names the pre-move path::
 
     cached: .../run3/no_lidar/no_lidar_0.mcap        (no longer exists)

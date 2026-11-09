@@ -1,7 +1,6 @@
 # Putnam Park 2026-04-15, IU opponent. Test split (held out).
-# Why each value is what it is: notes/calibration_history.md#iu_2026_04_15_rear
 # Known issue: unexplained range-proportional lateral bias (~ -1.3 deg of bearing) and a
-# box offset 0.33 m outside the URDF window. Left as measured; see notes/RESULTS.md.
+# box offset 0.33 m outside the URDF window. Left as measured.
 name: iu_2026_04_15_rear
 location: putnam-park   # nuScenes log.location
 split: test

@@ -1,5 +1,4 @@
 # Putnam Park 2026-05-05, Caltech opponent. Val split.
-# Why each value is what it is: notes/calibration_history.md#caltech_2026_05_05_rear
 name: caltech_2026_05_05_rear
 location: putnam-park   # nuScenes log.location
 split: val

@@ -1,5 +1,4 @@
 # Laguna Seca 2026-07-26 run3, Purdue opponent. Train split.
-# Why each value is what it is: notes/calibration_history.md#laguna_2026_07_26_rear
 name: laguna_2026_07_26_rear
 location: laguna-seca   # nuScenes log.location
 split: train

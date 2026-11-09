@@ -1,6 +1,5 @@
 # RadarPillar (PointPillars for 4D radar) car detector on the rear FRGen21 radar.
-# Identical to the archived v5 model (notes/configs_archive/rear_radarpillar_car_v5.yaml),
-# the best recipe so far. Checkpoints are saved every epoch by the run script
+# The v5 recipe. Checkpoints are saved every epoch by the run script
 # (--ckpt_save_interval 1, --max_ckpt_save_num = epochs) for eval_all and averaging.
 CLASS_NAMES: ['Car']
 

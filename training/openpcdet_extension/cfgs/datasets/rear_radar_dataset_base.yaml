@@ -1,7 +1,5 @@
 # The rear-radar dataset config every current model trains on: 4 stacked scans (+ time_lag)
 # and Doppler-consistent augmentation (radar/radar_augment.py, training split only).
-# Identical to the archived v5 config (notes/configs_archive/rear_radar_dataset_v5.yaml);
-# the history behind each value is in the archived v3/v4/v5 configs.
 DATASET: 'RadarDataset'
 # Voxel limits: 4 stacked scans peak at 2224 (train) and 2680 (val) occupied pillars in
 # range, under the 4000/8000 caps, and <1e-5 of points exceed MAX_POINTS_PER_VOXEL.
@@ -47,7 +45,7 @@ DATA_AUGMENTOR:
     DISABLE_AUG_LIST: ['placeholder']
     AUG_CONFIG_LIST: []
 
-# Radar-aware replacement: see radar_augment_example.yaml for the rationale of each value.
+# Radar-aware replacement for the stock augmentor.
 RADAR_AUGMENT:
     ENABLED: True
     # rear_axle_middle <- radar_rear, AV-24 URDF (data_nuscenes calibrated_sensor.json).

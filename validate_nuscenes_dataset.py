@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate the rear-radar nuScenes dataset against the official nuScenes devkit.
 
-    python3 radar_openpcdet/validate_nuscenes_dataset.py            # full check
-    python3 radar_openpcdet/validate_nuscenes_dataset.py --skip-eval
+    python3 validate_nuscenes_dataset.py            # full check
+    python3 validate_nuscenes_dataset.py --skip-eval
 
 Everything is read back through ``nuscenes-devkit`` (vendored under ``vendor/pylib``),
 not through the builder's own code, so a check that passes means a devkit user sees the
@@ -22,9 +22,8 @@ same dataset the builder meant to write:
 4. splits      scenes are run-blocked; split sizes and background fractions.
 4b. sweeps     every non-key scan sits on its scene's sample_data chain, at most
                ``sweeps.max_lag_s`` before its keyframe, with its files; and background
-               keyframes get as many previous scans as positives do (the stacked-scan
-               shortcut the 2026-09-28 build had: positives 98% full stacks, background
-               4-19%).
+               keyframes get as many previous scans as positives do (otherwise the
+               stack depth alone tells the model whether a car is present).
 5. label QA    per run, how tightly the opponent's moving returns sit on the box, and
                the near-edge gate: a radar only lights the face of the car pointing at
                it, and the opponent is behind us, so the returns' leading edge in box
@@ -432,8 +431,7 @@ def main() -> None:
         origin = run_entry.get("opponent_pose_origin", "center_of_gravity")
         # pp puts the centre (OPP_BOX_CENTER_IN_RAM - COG_IN_RAM) ahead of the reported
         # pose; the run's offset moves it further along the heading. OPP_BOX_CENTER_IN_RAM
-        # is the pinned value the builder checks against the shared checkout (it was
-        # length / 2 until 2026-09-27).
+        # is the pinned value the builder checks against the shared checkout.
         box_origin = float(config["openpcdet"]["expected_box_center_x_in_ram_m"])
         ahead_of_pose = box_origin - origins["center_of_gravity"] + float(run_entry.get("box_center_forward_offset_m", 0.0))
         implied = origins[origin] + ahead_of_pose

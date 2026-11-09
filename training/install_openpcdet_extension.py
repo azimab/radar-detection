@@ -18,13 +18,11 @@ REGISTRY_LINE = "    'RadarDataset': RadarDataset,\n"
 
 
 RADAR_PACKAGE = ["__init__.py", "radar_dataset.py", "radar_eval.py", "rotate_iou_torch.py", "radar_augment.py"]
-ARCHIVE = Path(__file__).resolve().parents[1] / "notes" / "configs_archive"
 
 
-def plan(repo: Path, source: Path, archive: bool = False) -> dict[Path, Path]:
+def plan(repo: Path, source: Path) -> dict[Path, Path]:
     """Every file to copy: the radar package, then every config in cfgs/datasets/ and
-    cfgs/models/ (no list to keep in sync). With ``archive``, also the retired v1-v5
-    configs in notes/configs_archive/, sorted into the same two folders."""
+    cfgs/models/ (no list to keep in sync)."""
     package = repo / "pcdet" / "datasets" / "radar"
     datasets = repo / "tools" / "cfgs" / "dataset_configs"
     models = repo / "tools" / "cfgs" / "rear_models"
@@ -33,10 +31,6 @@ def plan(repo: Path, source: Path, archive: bool = False) -> dict[Path, Path]:
         targets[cfg] = datasets / cfg.name
     for cfg in sorted((source / "cfgs" / "models").glob("*.yaml")):
         targets[cfg] = models / cfg.name
-    if archive:
-        for cfg in sorted(ARCHIVE.glob("rear_radar*.yaml")):
-            is_model = cfg.name.startswith("rear_radarpillar")
-            targets[cfg] = (models if is_model else datasets) / cfg.name
     clash = [dst for dst in targets.values() if list(targets.values()).count(dst) > 1]
     if clash:
         raise RuntimeError(f"two configs install to the same place: {sorted(set(clash))}")
@@ -58,11 +52,11 @@ def patched_registry(text: str, registry: Path) -> str:
     return updated
 
 
-def install(repo: Path, source: Path, dry_run: bool, archive: bool = False) -> None:
+def install(repo: Path, source: Path, dry_run: bool) -> None:
     registry = repo / "pcdet" / "datasets" / "__init__.py"
     if not registry.is_file():
         raise FileNotFoundError(f"not an OpenPCDet checkout: {registry} is missing")
-    targets = plan(repo, source, archive)
+    targets = plan(repo, source)
     for src in targets:
         if not src.is_file():
             raise FileNotFoundError(src)
@@ -98,10 +92,8 @@ def main() -> None:
         default=Path(os.environ.get("RADARPILLAR_ROOT", Path(__file__).parent / "vendor" / "RadarPillar")),
     )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--archive", action="store_true",
-                        help="also install the retired v1-v5 configs from notes/configs_archive/")
     args = parser.parse_args()
-    install(args.repo.resolve(), Path(__file__).parent / "openpcdet_extension", args.dry_run, args.archive)
+    install(args.repo.resolve(), Path(__file__).parent / "openpcdet_extension", args.dry_run)
 
 
 if __name__ == "__main__":
